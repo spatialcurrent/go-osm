@@ -79,6 +79,62 @@ func (p *Planet) DropRelations() {
 	p.Relations = make([]*Relation, 0)
 }
 
+func (p *Planet) DropAttributes(drop_version bool, drop_timestamp bool, drop_changeset bool, drop_uid bool, drop_user bool) {
+	if drop_version || drop_timestamp || drop_changeset {
+		for _, n := range p.Nodes {
+			if drop_version {
+				n.DropVersion()
+			}
+			if drop_timestamp {
+				n.DropTimestamp()
+			}
+			if drop_changeset {
+				n.DropChangeset()
+			}
+			if drop_uid {
+				n.DropUid()
+			}
+			if drop_user {
+				n.DropUser()
+			}
+		}
+		for _, w := range p.Ways {
+			if drop_version {
+				w.DropVersion()
+			}
+			if drop_timestamp {
+				w.DropTimestamp()
+			}
+			if drop_changeset {
+				w.DropChangeset()
+			}
+			if drop_uid {
+				w.DropUid()
+			}
+			if drop_user {
+				w.DropUser()
+			}
+		}
+		for _, r := range p.Relations {
+			if drop_version {
+				r.DropVersion()
+			}
+			if drop_timestamp {
+				r.DropTimestamp()
+			}
+			if drop_changeset {
+				r.DropChangeset()
+			}
+			if drop_uid {
+				r.DropUid()
+			}
+			if drop_user {
+				r.DropUser()
+			}
+		}
+	}
+}
+
 func (p *Planet) DropVersion() {
 	for _, n := range p.Nodes {
 		n.DropVersion()

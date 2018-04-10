@@ -43,3 +43,11 @@ func (w *Way) DropTimestamp() {
 func (w *Way) DropChangeset() {
 	w.Changeset = int64(0)
 }
+
+func (w *Way) DropUid() {
+	w.UserId = int64(0)
+}
+
+func (w *Way) DropUser() {
+	w.UserName = ""
+}

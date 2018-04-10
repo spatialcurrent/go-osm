@@ -50,3 +50,11 @@ func (n *Node) DropTimestamp() {
 func (n *Node) DropChangeset() {
 	n.Changeset = int64(0)
 }
+
+func (n *Node) DropUid() {
+	n.UserId = int64(0)
+}
+
+func (n *Node) DropUser() {
+	n.UserName = ""
+}

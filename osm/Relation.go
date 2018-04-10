@@ -32,3 +32,11 @@ func (r *Relation) DropTimestamp() {
 func (r *Relation) DropChangeset() {
 	r.Changeset = int64(0)
 }
+
+func (r *Relation) DropUid() {
+	r.UserId = int64(0)
+}
+
+func (r *Relation) DropUser() {
+	r.UserName = ""
+}
