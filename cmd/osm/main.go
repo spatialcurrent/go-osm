@@ -65,18 +65,18 @@ func main() {
 	flag.StringVar(&output_uri, "output_uri", "", "Output uri.  Supported file extensions: .osm, .osm.gz")
 	flag.StringVar(&include_keys_text, "include_keys", "", "Comma-separated list of tag keys to keep")
 
-	flag.BoolVar(&ways_to_nodes, "ways_to_nodes", false, "Convert ways into nodes")
-	flag.BoolVar(&drop_relations, "drop_relations", false, "Drop relations")
-	flag.BoolVar(&drop_version, "drop_version", false, "Drop version")
-	flag.BoolVar(&drop_timestamp, "drop_timestamp", false, "Drop timestamp")
-	flag.BoolVar(&drop_changeset, "drop_changeset", false, "Drop changeset")
+	flag.BoolVar(&ways_to_nodes, "ways_to_nodes", false, "Convert ways into nodes for output")
+	flag.BoolVar(&drop_relations, "drop_relations", false, "Drop relations from output")
+	flag.BoolVar(&drop_version, "drop_version", false, "Drop version attribute from output")
+	flag.BoolVar(&drop_timestamp, "drop_timestamp", false, "Drop timestamp attribute from output")
+	flag.BoolVar(&drop_changeset, "drop_changeset", false, "Drop changeset attribute from output")
 
-	flag.BoolVar(&drop_uid, "drop_uid", false, "Drop uid")
-	flag.BoolVar(&drop_user, "drop_user", false, "Drop user")
+	flag.BoolVar(&drop_uid, "drop_uid", false, "Drop uid attribute from output")
+	flag.BoolVar(&drop_user, "drop_user", false, "Drop user attribute from output")
 	flag.BoolVar(&drop_author, "drop_author", false, "Drop author.  Synonymous to drop_uid and drop_user")
 
 	flag.BoolVar(&summarize, "summarize", false, "Print data summary to stdout (bounding box, number of nodes, number of ways, and number of relations)")
-	flag.BoolVar(&pretty, "pretty", false, "Pretty output")
+	flag.BoolVar(&pretty, "pretty", false, "Pretty output.  Adds indents.")
 
 	flag.BoolVar(&verbose, "verbose", false, "Provide verbose output")
 	flag.BoolVar(&overwrite, "overwrite", false, "Overwrite output file.")
@@ -86,7 +86,10 @@ func main() {
 
 	flag.Parse()
 
-	include_keys := strings.Split(include_keys_text, ",")
+	include_keys := make([]string, 0)
+	if len(include_keys_text) > 0 {
+		include_keys = strings.Split(include_keys_text, ",")
+	}
 
 	if help {
 		fmt.Println("Usage: osm -input_uri INPUT -output_uri OUTPUT [-verbose] [-dry_run] [-version] [-help]")
@@ -105,12 +108,6 @@ func main() {
 	if version {
 		fmt.Println(GO_OSM_VERSION)
 		os.Exit(0)
-	}
-
-	if len(include_keys) == 0 {
-		fmt.Println("Error: Missing command line argument \"include_keys\".")
-		fmt.Println("Run \"osm --help\" for more information.")
-		os.Exit(1)
 	}
 
 	output_path := ""

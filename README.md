@@ -2,7 +2,7 @@
 
 # Description
 
-**go-osm** is a tool for filtering and transforming OSM data.
+**go-osm** is a tool for manipulating OSM planet files.
 
 # Building
 
@@ -18,17 +18,17 @@ Usage: osm -input_uri INPUT -output_uri OUTPUT [-verbose] [-dry_run] [-version] 
   -drop_author
     	Drop author.  Synonymous to drop_uid and drop_user
   -drop_changeset
-    	Drop changeset
+    	Drop changeset attribute from output
   -drop_relations
-    	Drop relations
+    	Drop relations from output
   -drop_timestamp
-    	Drop timestamp
+    	Drop timestamp attribute from output
   -drop_uid
-    	Drop uid
+    	Drop uid attribute from output
   -drop_user
-    	Drop user
+    	Drop user attribute from output
   -drop_version
-    	Drop version
+    	Drop version attribute from output
   -dry_run
     	Test user input but do not execute.
   -help
@@ -42,7 +42,7 @@ Usage: osm -input_uri INPUT -output_uri OUTPUT [-verbose] [-dry_run] [-version] 
   -overwrite
     	Overwrite output file.
   -pretty
-    	Pretty output
+    	Pretty output.  Adds indents.
   -summarize
     	Print data summary to stdout (bounding box, number of nodes, number of ways, and number of relations)
   -verbose
@@ -50,8 +50,7 @@ Usage: osm -input_uri INPUT -output_uri OUTPUT [-verbose] [-dry_run] [-version] 
   -version
     	Prints version to stdout
   -ways_to_nodes
-    	Convert ways into nodes
-
+    	Convert ways into nodes for output
 ```
 
 # Contributing

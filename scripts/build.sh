@@ -13,11 +13,11 @@ echo "Formatting github.com/spatialcurrent/$NAME/osm"
 go fmt github.com/spatialcurrent/$NAME/osm
 echo "Done formatting."
 echo "******************"
-echo "Building plugin for $NAME"
+echo "Building program for $NAME"
 cd $DIR/../bin
 go build github.com/spatialcurrent/$NAME/cmd/osm
 if [[ "$?" != 0 ]] ; then
-    echo "Error building $NAME program"
+    echo "Error building program for $NAME"
     exit 1
 fi
 
