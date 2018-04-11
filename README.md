@@ -15,6 +15,15 @@ bash build.sh
 
 ```
 Usage: osm -input_uri INPUT -output_uri OUTPUT [-verbose] [-dry_run] [-version] [-help]
+Supported Schemes: file, http, https, s3
+Supported File Extensions: .osm, .osm.gz
+Options:
+  -aws_access_key_id string
+    	Defaults to value of environment variable AWS_ACCESS_KEY_ID
+  -aws_default_region string
+    	Defaults to value of environment variable AWS_DEFAULT_REGION.
+  -aws_secret_access_key string
+    	Defaults to value of environment variable AWS_SECRET_ACCESS_KEY.
   -drop_author
     	Drop author.  Synonymous to drop_uid and drop_user
   -drop_changeset
@@ -36,9 +45,9 @@ Usage: osm -input_uri INPUT -output_uri OUTPUT [-verbose] [-dry_run] [-version] 
   -include_keys string
     	Comma-separated list of tag keys to keep
   -input_uri string
-    	Input uri.  Supported file extensions: .osm, .osm.gz
+    	Input uri.  "stdin" or uri to input file.
   -output_uri string
-    	Output uri.  Supported file extensions: .osm, .osm.gz
+    	Output uri. "stdout", "stderr", or uri to output file.
   -overwrite
     	Overwrite output file.
   -pretty
@@ -70,7 +79,7 @@ osmconvert district-of-columbia-latest.osm.pbf | osm \
 -verbose
 ```
 
-Summarize osm file in S3 folder.
+Summarize OSM planet file in S3 folder
 
 ```shell
 AWS_DEFAULT_REGION=us-east-1 osm -input_uri s3://<YOUR BUCKET>/data/district-of-columbia-latest.osm.gz -summarize

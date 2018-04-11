@@ -175,12 +175,22 @@ func main() {
 	var version bool
 	var help bool
 
-	flag.StringVar(&aws_default_region, "aws_default_region", os.Getenv("AWS_DEFAULT_REGION"), "Defaults to value of environment variable AWS_DEFAULT_REGION.")
-	flag.StringVar(&aws_access_key_id, "aws_access_key_id", os.Getenv("AWS_ACCESS_KEY_ID"), "Defaults to value of environment variable AWS_ACCESS_KEY_ID")
-	flag.StringVar(&aws_secret_access_key, "aws_secret_access_key", os.Getenv("AWS_SECRET_ACCESS_KEY"), "Defaults to value of environment variable AWS_SECRET_ACCESS_KEY.")
+	flag.StringVar(&aws_default_region, "aws_default_region", "", "Defaults to value of environment variable AWS_DEFAULT_REGION.")
+	flag.StringVar(&aws_access_key_id, "aws_access_key_id", "", "Defaults to value of environment variable AWS_ACCESS_KEY_ID")
+	flag.StringVar(&aws_secret_access_key, "aws_secret_access_key", "", "Defaults to value of environment variable AWS_SECRET_ACCESS_KEY.")
 
-	flag.StringVar(&input_uri, "input_uri", "", "Input uri.  \"stdin\" or uri to input file.  Supported schemes: "+strings.Join(SUPPORTED_SCHEMES, ", ")+".  Supported file extensions: .osm, .osm.gz")
-	flag.StringVar(&output_uri, "output_uri", "", "Output uri. \"stdout\", \"stderr\", or uri to output file.  Supported schemes: "+strings.Join(SUPPORTED_SCHEMES, ", ")+".  Supported file extensions: .osm, .osm.gz")
+	if len(aws_default_region) == 0 {
+		aws_default_region = os.Getenv("AWS_DEFAULT_REGION")
+	}
+	if len(aws_access_key_id) == 0 {
+		aws_access_key_id = os.Getenv("AWS_ACCESS_KEY_ID")
+	}
+	if len(aws_secret_access_key) == 0 {
+		aws_secret_access_key = os.Getenv("AWS_SECRET_ACCESS_KEY")
+	}
+
+	flag.StringVar(&input_uri, "input_uri", "", "Input uri.  \"stdin\" or uri to input file.")
+	flag.StringVar(&output_uri, "output_uri", "", "Output uri. \"stdout\", \"stderr\", or uri to output file.")
 	flag.StringVar(&include_keys_text, "include_keys", "", "Comma-separated list of tag keys to keep")
 
 	flag.BoolVar(&ways_to_nodes, "ways_to_nodes", false, "Convert ways into nodes for output")
