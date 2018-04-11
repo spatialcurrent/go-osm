@@ -57,8 +57,8 @@ Usage: osm -input_uri INPUT -output_uri OUTPUT [-verbose] [-dry_run] [-version] 
 
 Filter Washington, DC .osm.pbf planet file to only features that include a certain tag.
 
-```
-osmconvert district-of-columbia-latest.osm.pbf" | osm \
+```shell
+osmconvert district-of-columbia-latest.osm.pbf | osm \
 -input_uri stdin \
 -output_uri district-of-columbia-latest-filtered-nodes-cleaned.osm \
 -include_keys amenity,aeroway,craft,leisure,shop,station,tourism \
@@ -70,8 +70,14 @@ osmconvert district-of-columbia-latest.osm.pbf" | osm \
 -verbose
 ```
 
-```
+Summarize osm file in S3 folder.
 
+```shell
+AWS_DEFAULT_REGION=us-east-1 osm -input_uri s3://<YOUR BUCKET>/data/district-of-columbia-latest.osm.gz -summarize
+Bounding Box: -77.120100,38.791340,-76.909060,38.996030
+Number of Nodes: 1701544
+Number of Ways: 206181
+Number of Relations: 3198
 ```
 
 # Contributing

@@ -19,6 +19,15 @@ import (
 
 import (
 	"github.com/mitchellh/go-homedir"
+	"github.com/pkg/errors"
+)
+
+import (
+	"github.com/aws/aws-sdk-go/aws"
+	//"github.com/aws/aws-sdk-go/aws/awserr"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
 )
 
 import (
@@ -31,12 +40,117 @@ import (
 
 var GO_OSM_VERSION = "0.0.1"
 
+var SUPPORTED_SCHEMES = []string{
+	"file",
+	"http",
+	"https",
+	"s3",
+}
+
 var XML_PRETTY_PREFIX = ""
 var XML_PRETTY_INDENT = "    "
+
+func parse_uri(uri string, schemes []string) (string, string) {
+	for _, scheme := range schemes {
+		if strings.HasPrefix(strings.ToLower(uri), scheme+"://") {
+			return scheme, uri[len(scheme+"://"):]
+		}
+	}
+	return "file", uri
+}
+
+func parse_path_s3(path string) (string, string, error) {
+	if !strings.Contains(path, "/") {
+		return "", "", errors.New("AWS S3 path does not include bucket.")
+	}
+	parts := strings.Split(path, "/")
+	return parts[0], strings.Join(parts[1:], "/"), nil
+}
+
+func connect_to_aws(aws_access_key_id string, aws_secret_access_key string, aws_region string) *session.Session {
+	aws_session := session.Must(session.NewSessionWithOptions(session.Options{
+		Config: aws.Config{
+			Credentials: credentials.NewStaticCredentials(aws_access_key_id, aws_secret_access_key, ""),
+			MaxRetries:  aws.Int(3),
+			Region:      aws.String(aws_region),
+		},
+	}))
+	return aws_session
+}
+
+func s3_object_exists(s3_client *s3.S3, bucket string, key string) bool {
+
+	input := &s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	}
+
+	_, err := s3_client.HeadObject(input)
+	if err != nil {
+		return false
+	}
+
+	return true
+}
+
+func s3_delete_object(s3_client *s3.S3, bucket string, key string) error {
+	input := &s3.DeleteObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	}
+
+	_, err := s3_client.DeleteObject(input)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func s3_get_object(s3_client *s3.S3, bucket string, key string) ([]byte, error) {
+	input := &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	}
+
+	result, err := s3_client.GetObject(input)
+	if err != nil {
+		return make([]byte, 0), err
+	}
+
+	if strings.HasSuffix(key, ".gz") {
+
+		gr, err := gzip.NewReader(result.Body)
+		if err != nil {
+			fmt.Println("Error creating gzip reader for AWS S3 object at s3://" + bucket + "/" + key + ".")
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		defer gr.Close()
+
+		obj, err := ioutil.ReadAll(gr)
+		if err != nil {
+			return make([]byte, 0), err
+		}
+		return obj, nil
+	}
+
+	obj, err := ioutil.ReadAll(result.Body)
+	if err != nil {
+		return make([]byte, 0), err
+	}
+
+	return obj, nil
+
+}
 
 func main() {
 
 	start := time.Now()
+
+	var aws_default_region string
+	var aws_access_key_id string
+	var aws_secret_access_key string
 
 	var input_uri string
 	var output_uri string
@@ -61,8 +175,12 @@ func main() {
 	var version bool
 	var help bool
 
-	flag.StringVar(&input_uri, "input_uri", "", "Input uri.  Supported file extensions: .osm, .osm.gz")
-	flag.StringVar(&output_uri, "output_uri", "", "Output uri.  Supported file extensions: .osm, .osm.gz")
+	flag.StringVar(&aws_default_region, "aws_default_region", os.Getenv("AWS_DEFAULT_REGION"), "Defaults to value of environment variable AWS_DEFAULT_REGION.")
+	flag.StringVar(&aws_access_key_id, "aws_access_key_id", os.Getenv("AWS_ACCESS_KEY_ID"), "Defaults to value of environment variable AWS_ACCESS_KEY_ID")
+	flag.StringVar(&aws_secret_access_key, "aws_secret_access_key", os.Getenv("AWS_SECRET_ACCESS_KEY"), "Defaults to value of environment variable AWS_SECRET_ACCESS_KEY.")
+
+	flag.StringVar(&input_uri, "input_uri", "", "Input uri.  \"stdin\" or uri to input file.  Supported schemes: "+strings.Join(SUPPORTED_SCHEMES, ", ")+".  Supported file extensions: .osm, .osm.gz")
+	flag.StringVar(&output_uri, "output_uri", "", "Output uri. \"stdout\", \"stderr\", or uri to output file.  Supported schemes: "+strings.Join(SUPPORTED_SCHEMES, ", ")+".  Supported file extensions: .osm, .osm.gz")
 	flag.StringVar(&include_keys_text, "include_keys", "", "Comma-separated list of tag keys to keep")
 
 	flag.BoolVar(&ways_to_nodes, "ways_to_nodes", false, "Convert ways into nodes for output")
@@ -93,6 +211,9 @@ func main() {
 
 	if help {
 		fmt.Println("Usage: osm -input_uri INPUT -output_uri OUTPUT [-verbose] [-dry_run] [-version] [-help]")
+		fmt.Println("Supported Schemes: " + strings.Join(SUPPORTED_SCHEMES, ", "))
+		fmt.Println("Supported File Extensions: .osm, .osm.gz")
+		fmt.Println("Options:")
 		flag.PrintDefaults()
 		os.Exit(0)
 	} else if len(os.Args) == 1 {
@@ -110,16 +231,28 @@ func main() {
 		os.Exit(0)
 	}
 
+	output_scheme := "" // stdin, stdout, stderr, file, http, https, s3
 	output_path := ""
+
+	if len(output_uri) > 0 {
+		if output_uri == "stdout" {
+			output_scheme = "stdout"
+		} else if output_uri == "stderr" {
+			output_scheme = "stderr"
+		} else {
+			output_scheme, output_path = parse_uri(output_uri, SUPPORTED_SCHEMES)
+		}
+	}
+
 	output_path_expanded := ""
 	output_exists := false
-	if len(output_uri) > 0 && output_uri != "stdout" && output_uri != "stdin" {
 
-		if strings.HasPrefix(output_uri, "file://") {
-			output_path = output_uri[7:]
-		} else {
-			output_path = output_uri
-		}
+	var aws_session *session.Session
+	var s3_client *s3.S3
+	output_s3_bucket := ""
+	output_s3_key := ""
+
+	if output_scheme == "file" {
 
 		p, err := homedir.Expand(output_path)
 		if err != nil {
@@ -134,17 +267,33 @@ func main() {
 			output_exists = true
 		}
 
-		if output_exists {
-			if !overwrite {
-				fmt.Println("Output file already exists at " + output_uri + ".")
-				fmt.Println("If you'd like to overwrite this file, then set the overwrite command line flag.")
-				fmt.Println("Run \"osm --help\" for more information.")
-				os.Exit(1)
-			} else if verbose {
-				fmt.Println("File already exists at " + output_uri + ".")
-			}
-		}
+	} else if output_scheme == "s3" {
 
+		aws_session = connect_to_aws(aws_access_key_id, aws_secret_access_key, aws_default_region)
+		s3_client = s3.New(aws_session)
+		b, k, err := parse_path_s3(output_path)
+		if err != nil {
+			fmt.Println("Error parsing AWS S3 path")
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		output_s3_bucket = b
+		output_s3_key = k
+		output_exists = s3_object_exists(s3_client, output_s3_bucket, output_s3_key)
+
+	} else {
+		output_path_expanded = output_path
+	}
+
+	if output_exists {
+		if !overwrite {
+			fmt.Println("Output file already exists at " + output_uri + ".")
+			fmt.Println("If you'd like to overwrite this file, then set the overwrite command line flag.")
+			fmt.Println("Run \"osm --help\" for more information.")
+			os.Exit(1)
+		} else if verbose {
+			fmt.Println("File already exists at " + output_uri + ".")
+		}
 	}
 
 	if drop_author {
@@ -156,15 +305,27 @@ func main() {
 		os.Exit(0)
 	}
 
-	if len(output_uri) > 0 && output_uri != "stdout" && output_uri != "stdin" && output_exists && overwrite {
-		err := os.Remove(output_path_expanded)
-		if err != nil {
-			fmt.Println("Error deleting existing file at output location " + output_uri + ".")
-			fmt.Println(err)
-			os.Exit(1)
-		}
-		if verbose {
-			fmt.Println("Deleted existing file at " + output_uri + ".")
+	if output_exists && overwrite {
+		if output_scheme == "file" {
+			err := os.Remove(output_path_expanded)
+			if err != nil {
+				fmt.Println("Error deleting existing file at output location " + output_uri + ".")
+				fmt.Println(err)
+				os.Exit(1)
+			}
+			if verbose {
+				fmt.Println("Deleted existing file at output location " + output_uri + ".")
+			}
+		} else if output_scheme == "s3" {
+			err := s3_delete_object(s3_client, output_s3_bucket, output_s3_key)
+			if err != nil {
+				fmt.Println("Error deleting existing object on AWS S3 at output location " + output_uri + ".")
+				fmt.Println(err)
+				os.Exit(1)
+			}
+			if verbose {
+				fmt.Println("Deleted existing object on AWS S3 at output location " + output_uri + ".")
+			}
 		}
 	}
 
@@ -187,64 +348,100 @@ func main() {
 
 	} else {
 
-		input_path := ""
-		if strings.HasPrefix(input_uri, "file://") {
-			input_path = input_uri[7:]
-		} else {
-			input_path = input_uri
-		}
+		input_scheme, input_path := parse_uri(input_uri, SUPPORTED_SCHEMES)
 
-		input_path_expanded, err := homedir.Expand(input_path)
-		if err != nil {
-			fmt.Println("Error expanding path")
-			os.Exit(1)
-		}
+		if input_scheme == "file" {
 
-		if strings.HasSuffix(input_path_expanded, ".osm.gz") || strings.HasSuffix(input_path_expanded, ".xml.gz") {
-
-			input_file, err := os.Open(input_path_expanded)
+			input_path_expanded, err := homedir.Expand(input_path)
 			if err != nil {
-				fmt.Println("Error opening input file at " + input_uri + ".")
+				fmt.Println("Error expanding path")
+				os.Exit(1)
+			}
+
+			if strings.HasSuffix(input_path_expanded, ".osm.gz") || strings.HasSuffix(input_path_expanded, ".xml.gz") {
+
+				input_file, err := os.Open(input_path_expanded)
+				if err != nil {
+					fmt.Println("Error opening input file at " + input_uri + ".")
+					fmt.Println(err)
+					os.Exit(1)
+				}
+				defer input_file.Close()
+
+				gr, err := gzip.NewReader(input_file)
+				if err != nil {
+					fmt.Println("Error creating gzip reader for file at " + input_uri + ".")
+					fmt.Println(err)
+					os.Exit(1)
+				}
+				defer gr.Close()
+
+				in, err := ioutil.ReadAll(gr)
+				if err != nil {
+					fmt.Println("Error reading from gzip file at " + input_uri + ".")
+					fmt.Println(err)
+					os.Exit(1)
+				}
+				input_bytes = []byte(strings.TrimSpace(string(in)))
+
+			} else if strings.HasSuffix(input_path_expanded, ".osm") || strings.HasSuffix(input_path_expanded, ".xml") {
+
+				in, err := ioutil.ReadFile(input_path_expanded)
+				if err != nil {
+					fmt.Println("Error reading from uri  " + input_uri + ".")
+					fmt.Println(err)
+					os.Exit(1)
+				}
+				input_bytes = []byte(strings.TrimSpace(string(in)))
+
+			} else if strings.HasSuffix(input_path_expanded, ".osm.pbf") || strings.HasSuffix(input_path_expanded, ".xml.pbf") {
+				fmt.Println("The OSM PBF format is not supported yet.")
+				os.Exit(1)
+			} else if strings.HasSuffix(input_path_expanded, ".o5m") {
+				fmt.Println("The o5m format is not supported yet.")
+				os.Exit(1)
+			} else {
+				fmt.Println("Unknown file extension for input at " + input_uri + ".")
+				os.Exit(1)
+			}
+
+		} else if input_scheme == "s3" {
+
+			if s3_client == nil {
+				if aws_session == nil {
+					aws_session = connect_to_aws(aws_access_key_id, aws_secret_access_key, aws_default_region)
+				}
+				s3_client = s3.New(aws_session)
+			}
+
+			input_s3_bucket, input_s3_key, err := parse_path_s3(input_path)
+			if err != nil {
+				fmt.Println("Error parsing AWS S3 path")
 				fmt.Println(err)
 				os.Exit(1)
 			}
-			defer input_file.Close()
 
-			gr, err := gzip.NewReader(input_file)
-			if err != nil {
-				fmt.Println("Error creating gzip reader for file at " + input_uri + ".")
-				fmt.Println(err)
+			if strings.HasSuffix(input_s3_key, ".osm.gz") || strings.HasSuffix(input_s3_key, ".xml.gz") || strings.HasSuffix(input_s3_key, ".osm") || strings.HasSuffix(input_s3_key, ".xml") {
+
+				in, err := s3_get_object(s3_client, input_s3_bucket, input_s3_key)
+				if err != nil {
+					fmt.Println("Error reading from AWS S3 uri " + input_uri + ".")
+					fmt.Println(err)
+					os.Exit(1)
+				}
+				input_bytes = in
+
+			} else if strings.HasSuffix(input_s3_key, ".osm.pbf") || strings.HasSuffix(input_s3_key, ".xml.pbf") {
+				fmt.Println("The OSM PBF format is not supported yet.")
+				os.Exit(1)
+			} else if strings.HasSuffix(input_s3_key, ".o5m") {
+				fmt.Println("The o5m format is not supported yet.")
+				os.Exit(1)
+			} else {
+				fmt.Println("Unknown file extension for input at " + input_uri + ".")
 				os.Exit(1)
 			}
-			defer gr.Close()
 
-			in, err := ioutil.ReadAll(gr)
-			if err != nil {
-				fmt.Println("Error reading from gzip file at " + input_uri + ".")
-				fmt.Println(err)
-				os.Exit(1)
-			}
-			input_bytes = []byte(strings.TrimSpace(string(in)))
-
-		} else if strings.HasSuffix(input_path_expanded, ".osm") || strings.HasSuffix(input_path_expanded, ".xml") {
-
-			in, err := ioutil.ReadFile(input_path_expanded)
-			if err != nil {
-				fmt.Println("Error reading from uri  " + input_uri + ".")
-				fmt.Println(err)
-				os.Exit(1)
-			}
-			input_bytes = []byte(strings.TrimSpace(string(in)))
-
-		} else if strings.HasSuffix(input_path_expanded, ".osm.pbf") || strings.HasSuffix(input_path_expanded, ".xml.pbf") {
-			fmt.Println("The OSM PBF format is not supported yet.")
-			os.Exit(1)
-		} else if strings.HasSuffix(input_path_expanded, ".o5m") {
-			fmt.Println("The o5m format is not supported yet.")
-			os.Exit(1)
-		} else {
-			fmt.Println("Unknown file extension for input at " + input_uri + ".")
-			os.Exit(1)
 		}
 
 	}
