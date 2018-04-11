@@ -20,5 +20,4 @@ if [[ "$?" != 0 ]] ; then
     echo "Error building program for $NAME"
     exit 1
 fi
-
 echo "Executable built at $(realpath $DIR/../bin/osm)"

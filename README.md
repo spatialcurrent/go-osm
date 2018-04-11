@@ -53,6 +53,27 @@ Usage: osm -input_uri INPUT -output_uri OUTPUT [-verbose] [-dry_run] [-version] 
     	Convert ways into nodes for output
 ```
 
+# Examples
+
+Filter Washington, DC .osm.pbf planet file to only features that include a certain tag.
+
+```
+osmconvert district-of-columbia-latest.osm.pbf" | osm \
+-input_uri stdin \
+-output_uri district-of-columbia-latest-filtered-nodes-cleaned.osm \
+-include_keys amenity,aeroway,craft,leisure,shop,station,tourism \
+-ways_to_nodes \
+-drop_version \
+-drop_timestamp \
+-drop_changeset \
+-drop_relations \
+-verbose
+```
+
+```
+
+```
+
 # Contributing
 
 [Spatial Current, Inc.](https://spatialcurrent.io) is currently accepting pull requests for this repository.  We'd love to have your contributions!  Please see [Contributing.md](https://github.com/spatialcurrent/go-osm/blob/master/CONTRIBUTING.md) for how to get started.
