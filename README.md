@@ -2,7 +2,7 @@
 
 # Description
 
-**go-osm** is a tool for manipulating OSM planet files.
+**go-osm** is a tool for manipulating OSM planet files.  **go-osm** supports the Dynamic Filter Language (DFL).
 
 # Building
 
@@ -24,6 +24,8 @@ Options:
     	Defaults to value of environment variable AWS_DEFAULT_REGION.
   -aws_secret_access_key string
     	Defaults to value of environment variable AWS_SECRET_ACCESS_KEY.
+  -dfl string
+    	DFL filter
   -drop_author
     	Drop author.  Synonymous to drop_uid and drop_user
   -drop_changeset
@@ -54,6 +56,8 @@ Options:
     	Pretty output.  Adds indents.
   -summarize
     	Print data summary to stdout (bounding box, number of nodes, number of ways, and number of relations)
+  -summarize_keys string
+    	Comma-separated list of keys to summarize
   -verbose
     	Provide verbose output
   -version
@@ -87,6 +91,15 @@ Bounding Box: -77.120100,38.791340,-76.909060,38.996030
 Number of Nodes: 1701544
 Number of Ways: 206181
 Number of Relations: 3198
+```
+
+Breweries in Washington, DC
+
+```
+AWS_DEFAULT_REGION=us-east-1 ./osm -input_uri s3://<YOUR BUCKET>/data/district-of-columbia-latest.osm.gz -summarize -ways_to_nodes -dfl '@craft like brewery' -drop_relations -output_uri breweries.osm
+Total Number of Nodes: 5
+Total Number of Ways: 0
+Total Number of Relations: 0
 ```
 
 # Contributing

@@ -206,7 +206,7 @@ func s3_put_object(s3_client *s3.S3, bucket string, key string, data []byte) err
 
 	}
 
-	result, err := s3_client.PutObject(input)
+	_, err := s3_client.PutObject(input)
 	if err != nil {
 		return err
 	}
