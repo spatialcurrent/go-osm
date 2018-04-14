@@ -58,3 +58,11 @@ func (n *Node) DropUid() {
 func (n *Node) DropUser() {
 	n.UserName = ""
 }
+
+func (n *Node) TagsAsMap() map[string]interface{} {
+	m := map[string]interface{}{}
+	for _, t := range n.Tags {
+		m[t.Key] = t.Value
+	}
+	return m
+}

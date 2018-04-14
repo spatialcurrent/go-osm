@@ -21,6 +21,15 @@ type Relation struct {
 	Tags      []Tag            `xml:"tag"`
 }
 
+func (r Relation) HasKey(key string) bool {
+	for _, t := range r.Tags {
+		if key == t.Key {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Relation) DropVersion() {
 	r.Version = 0
 }
@@ -39,4 +48,12 @@ func (r *Relation) DropUid() {
 
 func (r *Relation) DropUser() {
 	r.UserName = ""
+}
+
+func (r *Relation) TagsAsMap() map[string]interface{} {
+	m := map[string]interface{}{}
+	for _, t := range r.Tags {
+		m[t.Key] = t.Value
+	}
+	return m
 }

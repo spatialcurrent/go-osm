@@ -5,6 +5,10 @@ import (
 	"time"
 )
 
+import (
+	"github.com/spatialcurrent/go-dfl/dfl"
+)
+
 type Planet struct {
 	XMLName   xml.Name    `xml:"osm"`
 	Version   string      `xml:"version,attr,omitempty"`
@@ -24,17 +28,27 @@ func (p Planet) BoundingBox() string {
 	return p.Bounds.BoundingBox()
 }
 
-func (p *Planet) FilterNodes(include_keys []string) {
+func (p *Planet) FilterNodes(include_keys []string, root dfl.Node, funcs map[string]func(map[string]interface{}, []string) (interface{}, error)) error {
 
-	if len(include_keys) > 0 {
+	if len(include_keys) > 0 || root != nil {
 		nodes := make([]*Node, 0)
 		for _, n := range p.Nodes {
-			keep := false
-			for _, k := range include_keys {
-				if n.HasKey(k) {
-					keep = true
-					break
+			keep := true
+			if len(include_keys) > 0 {
+				keep = false
+				for _, k := range include_keys {
+					if n.HasKey(k) {
+						keep = true
+						break
+					}
 				}
+			}
+			if keep && root != nil {
+				dfl_result, err := root.Evaluate(n.TagsAsMap(), funcs)
+				if err != nil {
+					return err
+				}
+				keep = dfl_result.(bool)
 			}
 			if keep {
 				nodes = append(nodes, n)
@@ -43,19 +57,30 @@ func (p *Planet) FilterNodes(include_keys []string) {
 		p.Nodes = nodes
 	}
 
+	return nil
 }
 
-func (p *Planet) FilterWays(include_keys []string) {
+func (p *Planet) FilterWays(include_keys []string, root dfl.Node, funcs map[string]func(map[string]interface{}, []string) (interface{}, error)) error {
 
-	if len(include_keys) > 0 {
+	if len(include_keys) > 0 || root != nil {
 		ways := make([]*Way, 0)
 		for _, w := range p.Ways {
-			keep := false
-			for _, k := range include_keys {
-				if w.HasKey(k) {
-					keep = true
-					break
+			keep := true
+			if len(include_keys) > 0 {
+				keep = false
+				for _, k := range include_keys {
+					if w.HasKey(k) {
+						keep = true
+						break
+					}
 				}
+			}
+			if keep && root != nil {
+				dfl_result, err := root.Evaluate(w.TagsAsMap(), funcs)
+				if err != nil {
+					return err
+				}
+				keep = dfl_result.(bool)
 			}
 			if keep {
 				ways = append(ways, w)
@@ -63,16 +88,22 @@ func (p *Planet) FilterWays(include_keys []string) {
 		}
 		p.Ways = ways
 	}
-
+	return nil
 }
 
-func (p *Planet) Filter(include_keys []string) {
+func (p *Planet) Filter(include_keys []string, root dfl.Node, funcs map[string]func(map[string]interface{}, []string) (interface{}, error)) error {
 
-	if len(include_keys) > 0 {
-		p.FilterNodes(include_keys)
-		p.FilterWays(include_keys)
+	err := p.FilterNodes(include_keys, root, funcs)
+	if err != nil {
+		return err
 	}
 
+	err = p.FilterWays(include_keys, root, funcs)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (p *Planet) DropRelations() {
@@ -214,4 +245,80 @@ func (p *Planet) ConvertWaysToNodes() {
 
 	p.Ways = make([]*Way, 0)
 
+}
+
+func (p Planet) CountNodes(key string) int {
+	count := 0
+	for _, n := range p.Nodes {
+		if n.HasKey(key) {
+			count += 1
+		}
+	}
+	return count
+}
+
+func (p Planet) CountWays(key string) int {
+	count := 0
+	for _, w := range p.Ways {
+		if w.HasKey(key) {
+			count += 1
+		}
+	}
+	return count
+}
+
+func (p Planet) CountRelations(key string) int {
+	count := 0
+	for _, r := range p.Relations {
+		if r.HasKey(key) {
+			count += 1
+		}
+	}
+	return count
+}
+
+func (p Planet) Count(key string) int {
+	return p.CountNodes(key) + p.CountWays(key) + p.CountRelations(key)
+}
+
+func (p Planet) Summarize(keys []string) Summary {
+
+	countsByKey := map[string]map[string]int{}
+	for _, key := range keys {
+		countsByKey[key] = map[string]int{
+			"nodes":     0,
+			"ways":      0,
+			"relations": 0,
+		}
+	}
+	for _, n := range p.Nodes {
+		for _, key := range keys {
+			if n.HasKey(key) {
+				countsByKey[key]["nodes"] += 1
+			}
+		}
+	}
+	for _, w := range p.Ways {
+		for _, key := range keys {
+			if w.HasKey(key) {
+				countsByKey[key]["ways"] += 1
+			}
+		}
+	}
+	for _, r := range p.Relations {
+		for _, key := range keys {
+			if r.HasKey(key) {
+				countsByKey[key]["relations"] += 1
+			}
+		}
+	}
+	s := Summary{
+		Bounds:         p.Bounds,
+		CountNodes:     len(p.Nodes),
+		CountWays:      len(p.Ways),
+		CountRelations: len(p.Relations),
+		CountsByKey:    countsByKey,
+	}
+
+	return s
 }

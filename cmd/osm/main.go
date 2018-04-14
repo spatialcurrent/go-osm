@@ -2,12 +2,14 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	//"encoding/json"
 	"encoding/xml"
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -32,6 +34,7 @@ import (
 
 import (
 	"github.com/spatialcurrent/go-composite-logger/compositelogger"
+	"github.com/spatialcurrent/go-dfl/dfl"
 )
 
 import (
@@ -76,6 +79,20 @@ func connect_to_aws(aws_access_key_id string, aws_secret_access_key string, aws_
 		},
 	}))
 	return aws_session
+}
+
+func s3_bucket_exists(s3_client *s3.S3, bucket string) bool {
+
+	input := &s3.HeadBucketInput{
+		Bucket: aws.String(bucket),
+	}
+
+	_, err := s3_client.HeadBucket(input)
+	if err != nil {
+		return false
+	}
+
+	return true
 }
 
 func s3_object_exists(s3_client *s3.S3, bucket string, key string) bool {
@@ -144,6 +161,75 @@ func s3_get_object(s3_client *s3.S3, bucket string, key string) ([]byte, error) 
 
 }
 
+func s3_create_bucket(s3_client *s3.S3, region string, bucket string) error {
+	input := &s3.CreateBucketInput{
+		Bucket: aws.String(bucket),
+		CreateBucketConfiguration: &s3.CreateBucketConfiguration{
+			LocationConstraint: aws.String(region),
+		},
+	}
+
+	result, err := s3_client.CreateBucket(input)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("Create Bucket Result:", result)
+
+	return nil
+
+}
+
+func s3_put_object(s3_client *s3.S3, bucket string, key string, data []byte) error {
+
+	input := &s3.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	}
+
+	if strings.HasSuffix(key, ".gz") {
+
+		var buf bytes.Buffer
+		gw := gzip.NewWriter(&buf)
+		gw.Write(data)
+		gw.Close()
+		body := buf.Bytes()
+		input.Body = bytes.NewReader(body)
+		input.ContentLength = aws.Int64(int64(len(body)))
+		input.ContentType = aws.String(http.DetectContentType(body))
+
+	} else {
+
+		input.Body = bytes.NewReader(data)
+		input.ContentLength = aws.Int64(int64(len(data)))
+		input.ContentType = aws.String(http.DetectContentType(data))
+
+	}
+
+	result, err := s3_client.PutObject(input)
+	if err != nil {
+		return err
+	}
+
+	//fmt.Println("Put Object Result:", result)
+
+	return nil
+
+}
+
+func dfl_build_funcs() map[string]func(map[string]interface{}, []string) (interface{}, error) {
+	funcs := map[string]func(map[string]interface{}, []string) (interface{}, error){}
+
+	funcs["len"] = func(ctx map[string]interface{}, args []string) (interface{}, error) {
+		if len(args) != 1 {
+			return 0, errors.New("Invalid number of arguments to len.")
+		}
+		return len(args[0]), nil
+	}
+
+	return funcs
+}
+
 func main() {
 
 	start := time.Now()
@@ -154,7 +240,10 @@ func main() {
 
 	var input_uri string
 	var output_uri string
+
 	var include_keys_text string
+
+	var dfl_filter_text string
 
 	var ways_to_nodes bool
 
@@ -167,6 +256,8 @@ func main() {
 	var drop_author bool
 
 	var summarize bool
+	var summarize_keys_text string
+
 	var pretty bool
 
 	var verbose bool
@@ -191,9 +282,12 @@ func main() {
 
 	flag.StringVar(&input_uri, "input_uri", "", "Input uri.  \"stdin\" or uri to input file.")
 	flag.StringVar(&output_uri, "output_uri", "", "Output uri. \"stdout\", \"stderr\", or uri to output file.")
+
 	flag.StringVar(&include_keys_text, "include_keys", "", "Comma-separated list of tag keys to keep")
+	flag.StringVar(&dfl_filter_text, "dfl", "", "DFL filter")
 
 	flag.BoolVar(&ways_to_nodes, "ways_to_nodes", false, "Convert ways into nodes for output")
+
 	flag.BoolVar(&drop_relations, "drop_relations", false, "Drop relations from output")
 	flag.BoolVar(&drop_version, "drop_version", false, "Drop version attribute from output")
 	flag.BoolVar(&drop_timestamp, "drop_timestamp", false, "Drop timestamp attribute from output")
@@ -204,6 +298,7 @@ func main() {
 	flag.BoolVar(&drop_author, "drop_author", false, "Drop author.  Synonymous to drop_uid and drop_user")
 
 	flag.BoolVar(&summarize, "summarize", false, "Print data summary to stdout (bounding box, number of nodes, number of ways, and number of relations)")
+	flag.StringVar(&summarize_keys_text, "summarize_keys", "", "Comma-separated list of keys to summarize")
 	flag.BoolVar(&pretty, "pretty", false, "Pretty output.  Adds indents.")
 
 	flag.BoolVar(&verbose, "verbose", false, "Provide verbose output")
@@ -217,6 +312,11 @@ func main() {
 	include_keys := make([]string, 0)
 	if len(include_keys_text) > 0 {
 		include_keys = strings.Split(include_keys_text, ",")
+	}
+
+	summarize_keys := make([]string, 0)
+	if len(summarize_keys_text) > 0 {
+		summarize_keys = strings.Split(summarize_keys_text, ",")
 	}
 
 	if help {
@@ -335,6 +435,16 @@ func main() {
 			}
 			if verbose {
 				fmt.Println("Deleted existing object on AWS S3 at output location " + output_uri + ".")
+			}
+		}
+	}
+
+	if !output_exists && output_scheme == "s3" {
+		if !s3_bucket_exists(s3_client, output_s3_bucket) {
+			err := s3_create_bucket(s3_client, aws_default_region, output_s3_bucket)
+			if err != nil {
+				fmt.Println("Error creating AWS S3 bucket.")
+				os.Exit(1)
 			}
 		}
 	}
@@ -475,7 +585,19 @@ func main() {
 		}
 	}
 
-	planet.Filter(include_keys)
+	var root dfl.Node
+	if len(dfl_filter_text) > 0 {
+		root, err = dfl.Parse(dfl_filter_text)
+		if err != nil {
+			fmt.Println("Error parsing DFL filter text", dfl_filter_text)
+			fmt.Println(err)
+			os.Exit(1)
+		}
+	}
+
+	funcs := dfl_build_funcs()
+
+	planet.Filter(include_keys, root, funcs)
 
 	if ways_to_nodes {
 		planet.ConvertWaysToNodes()
@@ -488,10 +610,8 @@ func main() {
 	planet.DropAttributes(drop_version, drop_timestamp, drop_changeset, drop_uid, drop_user)
 
 	if summarize {
-		fmt.Println("Bounding Box:", planet.BoundingBox())
-		fmt.Println("Number of Nodes:", len(planet.Nodes))
-		fmt.Println("Number of Ways:", len(planet.Ways))
-		fmt.Println("Number of Relations:", len(planet.Relations))
+		summary := planet.Summarize(summarize_keys)
+		summary.Print()
 	}
 
 	if len(output_uri) > 0 {
@@ -516,7 +636,8 @@ func main() {
 		} else if output_uri == "stderr" {
 			fmt.Fprintf(os.Stderr, xml.Header)
 			fmt.Fprintf(os.Stderr, string(output_bytes))
-		} else {
+		} else if output_scheme == "file" {
+
 			if verbose {
 				fmt.Println("Writing to " + output_uri + ".")
 			}
@@ -591,6 +712,20 @@ func main() {
 				}
 			}
 
+		} else if output_scheme == "s3" {
+			err := s3_put_object(
+				s3_client,
+				output_s3_bucket,
+				output_s3_key,
+				append(append([]byte(xml.Header), output_bytes...), []byte("\n")...))
+			if err != nil {
+				fmt.Println("Error uploading object to AWS S3 at output location " + output_uri + ".")
+				fmt.Println(err)
+				os.Exit(1)
+			}
+			if verbose {
+				fmt.Println("Deleted uploading object to AWS S3 at output location " + output_uri + ".")
+			}
 		}
 
 	}

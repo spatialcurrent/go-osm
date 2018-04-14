@@ -51,3 +51,11 @@ func (w *Way) DropUid() {
 func (w *Way) DropUser() {
 	w.UserName = ""
 }
+
+func (w *Way) TagsAsMap() map[string]interface{} {
+	m := map[string]interface{}{}
+	for _, t := range w.Tags {
+		m[t.Key] = t.Value
+	}
+	return m
+}
