@@ -41,7 +41,7 @@ import (
 	"github.com/spatialcurrent/go-osm/osm"
 )
 
-var GO_OSM_VERSION = "0.0.1"
+var GO_OSM_VERSION = "0.0.2"
 
 var SUPPORTED_SCHEMES = []string{
 	"file",

@@ -11,6 +11,12 @@ cd scripts
 bash build.sh
 ```
 
+To build for windows run:
+
+```
+GOOS=windows GOARCH=amd64 go build github.com/spatialcurrent/go-osm/cmd/osm
+```
+
 # Usage
 
 ```
