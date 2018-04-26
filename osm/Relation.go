@@ -30,6 +30,28 @@ func (r Relation) HasKey(key string) bool {
 	return false
 }
 
+func (r *Relation) DropAttributes(output Output) {
+	if output.DropVersion {
+		r.DropVersion()
+	}
+
+	if output.DropTimestamp {
+		r.DropTimestamp()
+	}
+
+	if output.DropChangeset {
+		r.DropChangeset()
+	}
+
+	if output.DropUserId {
+		r.DropUserId()
+	}
+
+	if output.DropUserName {
+		r.DropUserName()
+	}
+}
+
 func (r *Relation) DropVersion() {
 	r.Version = 0
 }
@@ -42,11 +64,11 @@ func (r *Relation) DropChangeset() {
 	r.Changeset = int64(0)
 }
 
-func (r *Relation) DropUid() {
+func (r *Relation) DropUserId() {
 	r.UserId = int64(0)
 }
 
-func (r *Relation) DropUser() {
+func (r *Relation) DropUserName() {
 	r.UserName = ""
 }
 

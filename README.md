@@ -108,6 +108,12 @@ Total Number of Ways: 0
 Total Number of Relations: 0
 ```
 
+Breweries & Distilleries in Washington, DC as GeoJson
+
+```
+./osm -input_uri district-of-columbia-latest.osm.bz2 -summarize -pretty -verbose -drop_relations -drop_timestamp -drop_changeset -drop_version -ways_to_nodes -include_keys craft -dfl_use_cache -dfl '(@craft like brewery) or (@craft like distillery)'  -output_uri breweries_and_distilleries.geojson -drop_tags 'dcgis:gis_id' -stream -overwrite -ways_to_nodes
+```
+
 # Contributing
 
 [Spatial Current, Inc.](https://spatialcurrent.io) is currently accepting pull requests for this repository.  We'd love to have your contributions!  Please see [Contributing.md](https://github.com/spatialcurrent/go-osm/blob/master/CONTRIBUTING.md) for how to get started.

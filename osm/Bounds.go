@@ -20,3 +20,16 @@ func (b Bounds) BoundingBox() string {
 		strconv.FormatFloat(b.MaximumLatitude, 'f', 6, 64),
 	}, ",")
 }
+
+func (b Bounds) ContainsPoint(lon float64, lat float64) bool {
+	return lon >= b.MinimumLatitude && lon <= b.MaximumLongitude && lat >= b.MinimumLatitude && lat <= b.MaximumLatitude
+}
+
+func NewBounds(minlon float64, minlat float64, maxlon float64, maxlat float64) *Bounds {
+	return &Bounds{
+		MinimumLongitude: minlon,
+		MinimumLatitude:  minlat,
+		MaximumLongitude: maxlon,
+		MaximumLatitude:  maxlat,
+	}
+}
