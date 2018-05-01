@@ -10,22 +10,23 @@ import (
 	"github.com/pkg/errors"
 )
 
-func UnmarshalWay(decoder *xml.Decoder, e xml.StartElement, output Output) (Way, error) {
-	w := Way{}
+func UnmarshalWay(decoder *xml.Decoder, e xml.StartElement, output Output) (*Way, []Tag, error) {
+	w := NewWay()
+	tags := make([]Tag, 0)
 
 	for _, attr := range e.Attr {
 		switch attr.Name.Local {
 		case "id":
 			id, err := strconv.ParseInt(attr.Value, 10, 64)
 			if err != nil {
-				return w, errors.Wrap(err, "Error parsing way id")
+				return w, tags, errors.Wrap(err, "Error parsing way id")
 			}
 			w.Id = id
 		case "version":
 			if !output.DropVersion {
 				version, err := strconv.Atoi(attr.Value)
 				if err != nil {
-					return w, errors.Wrap(err, "Error parsing way version")
+					return w, tags, errors.Wrap(err, "Error parsing way version")
 				}
 				w.Version = version
 			}
@@ -33,7 +34,7 @@ func UnmarshalWay(decoder *xml.Decoder, e xml.StartElement, output Output) (Way,
 			if !output.DropChangeset {
 				changeset, err := strconv.ParseInt(attr.Value, 10, 64)
 				if err != nil {
-					return w, errors.Wrap(err, "Error parsing way changeset")
+					return w, tags, errors.Wrap(err, "Error parsing way changeset")
 				}
 				w.Changeset = changeset
 			}
@@ -41,7 +42,7 @@ func UnmarshalWay(decoder *xml.Decoder, e xml.StartElement, output Output) (Way,
 			if !output.DropTimestamp {
 				ts, err := time.Parse(time.RFC3339, attr.Value)
 				if err != nil {
-					return w, errors.Wrap(err, "Error parsing way timestamp")
+					return w, tags, errors.Wrap(err, "Error parsing way timestamp")
 				}
 				w.Timestamp = &ts
 			}
@@ -49,7 +50,7 @@ func UnmarshalWay(decoder *xml.Decoder, e xml.StartElement, output Output) (Way,
 			if !output.DropUserId {
 				uid, err := strconv.ParseInt(attr.Value, 10, 64)
 				if err != nil {
-					return w, errors.Wrap(err, "Error parsing way uid")
+					return w, tags, errors.Wrap(err, "Error parsing way uid")
 				}
 				w.UserId = uid
 			}
@@ -99,7 +100,7 @@ NodesAndTags:
 					}
 				}
 				if keep {
-					w.Tags = append(w.Tags, tag)
+					tags = append(tags, tag)
 				}
 			case "nd":
 				nr := NodeReference{}
@@ -108,7 +109,7 @@ NodesAndTags:
 					case "ref":
 						ref, err := strconv.ParseInt(attr.Value, 10, 64)
 						if err != nil {
-							return w, errors.Wrap(err, "Error parsing node reference")
+							return w, tags, errors.Wrap(err, "Error parsing node reference")
 						}
 						nr.Reference = ref
 					}
@@ -123,5 +124,5 @@ NodesAndTags:
 		}
 	}
 
-	return w, nil
+	return w, tags, nil
 }

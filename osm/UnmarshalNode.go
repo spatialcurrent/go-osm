@@ -10,22 +10,23 @@ import (
 	"github.com/pkg/errors"
 )
 
-func UnmarshalNode(decoder *xml.Decoder, e xml.StartElement, output Output) (Node, error) {
-	n := Node{}
+func UnmarshalNode(decoder *xml.Decoder, e xml.StartElement, output Output) (*Node, []Tag, error) {
+	n := NewNode()
+	tags := make([]Tag, 0)
 
 	for _, attr := range e.Attr {
 		switch attr.Name.Local {
 		case "id":
 			id, err := strconv.ParseInt(attr.Value, 10, 64)
 			if err != nil {
-				return n, errors.Wrap(err, "Error parsing node id")
+				return n, tags, errors.Wrap(err, "Error parsing node id")
 			}
 			n.Id = id
 		case "version":
 			if !output.DropVersion {
 				version, err := strconv.Atoi(attr.Value)
 				if err != nil {
-					return n, errors.Wrap(err, "Error parsing node version")
+					return n, tags, errors.Wrap(err, "Error parsing node version")
 				}
 				n.Version = version
 			}
@@ -33,7 +34,7 @@ func UnmarshalNode(decoder *xml.Decoder, e xml.StartElement, output Output) (Nod
 			if !output.DropChangeset {
 				changeset, err := strconv.ParseInt(attr.Value, 10, 64)
 				if err != nil {
-					return n, errors.Wrap(err, "Error parsing node changeset")
+					return n, tags, errors.Wrap(err, "Error parsing node changeset")
 				}
 				n.Changeset = changeset
 			}
@@ -41,7 +42,7 @@ func UnmarshalNode(decoder *xml.Decoder, e xml.StartElement, output Output) (Nod
 			if !output.DropTimestamp {
 				ts, err := time.Parse(time.RFC3339, attr.Value)
 				if err != nil {
-					return n, errors.Wrap(err, "Error parsing node timestamp")
+					return n, tags, errors.Wrap(err, "Error parsing node timestamp")
 				}
 				n.Timestamp = &ts
 			}
@@ -49,7 +50,7 @@ func UnmarshalNode(decoder *xml.Decoder, e xml.StartElement, output Output) (Nod
 			if !output.DropUserId {
 				uid, err := strconv.ParseInt(attr.Value, 10, 64)
 				if err != nil {
-					return n, errors.Wrap(err, "Error parsing node uid")
+					return n, tags, errors.Wrap(err, "Error parsing node uid")
 				}
 				n.UserId = uid
 			}
@@ -60,19 +61,19 @@ func UnmarshalNode(decoder *xml.Decoder, e xml.StartElement, output Output) (Nod
 		case "lat":
 			lat, err := strconv.ParseFloat(attr.Value, 64)
 			if err != nil {
-				return n, errors.Wrap(err, "Error parsing node latitude")
+				return n, tags, errors.Wrap(err, "Error parsing node latitude")
 			}
 			n.Latitude = lat
 		case "lon":
 			lon, err := strconv.ParseFloat(attr.Value, 64)
 			if err != nil {
-				return n, errors.Wrap(err, "Error parsing node longitude")
+				return n, tags, errors.Wrap(err, "Error parsing node longitude")
 			}
 			n.Longitude = lon
 		}
 	}
 
-	n.Tags = UnmarshalTags(decoder, output.KeysToKeep, output.KeysToKeep)
+	tags = UnmarshalTags(decoder, output.KeysToKeep, output.KeysToKeep)
 
-	return n, nil
+	return n, tags, nil
 }

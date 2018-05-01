@@ -9,6 +9,8 @@ type Summary struct {
 	CountNodes     int                       `xml:"nodes"`
 	CountWays      int                       `xml:"ways"`
 	CountRelations int                       `xml:"relations"`
+	CountKeys      int                       `xml:"keys"`
+	CountTags      int                       `xml:"tags"`
 	CountsByKey    map[string]map[string]int `xml:"by_key"`
 }
 
@@ -21,6 +23,8 @@ func (s Summary) Print() {
 	fmt.Println("Total Number of Nodes:", s.CountNodes)
 	fmt.Println("Total Number of Ways:", s.CountWays)
 	fmt.Println("Total Number of Relations:", s.CountRelations)
+	fmt.Println("Total Number of Keys:", s.CountKeys)
+	fmt.Println("Total Number of Tags:", s.CountTags)
 	for key, counts := range s.CountsByKey {
 		fmt.Println("-----------")
 		fmt.Println("Key:", key)

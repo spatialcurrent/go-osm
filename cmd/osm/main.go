@@ -2,13 +2,15 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"compress/bzip2"
 	"compress/gzip"
 	"encoding/json"
 	"encoding/xml"
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
+	//"io/ioutil"
 	"os"
 	"runtime"
 	"strconv"
@@ -76,7 +78,7 @@ func connect_to_aws(aws_access_key_id string, aws_secret_access_key string, aws_
 func dfl_build_funcs() dfl.FunctionMap {
 	funcs := dfl.FunctionMap{}
 
-	funcs["len"] = func(ctx map[string]interface{}, args []string) (interface{}, error) {
+	funcs["len"] = func(ctx dfl.Context, args []string) (interface{}, error) {
 		if len(args) != 1 {
 			return 0, errors.New("Invalid number of arguments to len.")
 		}
@@ -239,6 +241,7 @@ func main() {
 	drop_ways = drop_ways || stringSliceContains(drop, "ways")
 	drop_relations = drop_relations || stringSliceContains(drop, "relations")
 	drop_timestamp = drop_timestamp || stringSliceContains(drop, "timestamp")
+	drop_changeset = drop_changeset || stringSliceContains(drop, "changeset")
 	drop_version = drop_version || stringSliceContains(drop, "version")
 	drop_author = drop_author || stringSliceContains(drop, "author")
 	drop_uid = drop_uid || stringSliceContains(drop, "uid")
@@ -275,6 +278,7 @@ func main() {
 		DropUserName:  drop_user,
 		KeysToKeep:    []string{},
 		KeysToDrop:    []string{},
+		Pretty:        pretty,
 	}
 
 	if len(ini_uri) > 0 {
@@ -474,16 +478,10 @@ func main() {
 
 	start_read := time.Now()
 
-	input_bytes := make([]byte, 0)
+	var input_file *os.File
+	var input_reader io.Reader
 	if input_uri == "stdin" {
-
-		in, err := ioutil.ReadAll(os.Stdin)
-		if err != nil {
-			fmt.Println("Error reading from stdin.")
-			os.Exit(1)
-		}
-		input_bytes = []byte(strings.TrimSpace(string(in)))
-
+		input_reader = bufio.NewReader(os.Stdin)
 	} else {
 
 		input_scheme, input_path := parse_uri(input_uri, SUPPORTED_SCHEMES)
@@ -498,13 +496,13 @@ func main() {
 
 			if strings.HasSuffix(input_path_expanded, ".osm.gz") {
 
-				input_file, err := os.Open(input_path_expanded)
+				f, err := os.Open(input_path_expanded)
 				if err != nil {
 					fmt.Println("Error opening input file at " + input_uri + ".")
 					fmt.Println(err)
 					os.Exit(1)
 				}
-				defer input_file.Close()
+				input_file = f
 
 				gr, err := gzip.NewReader(input_file)
 				if err != nil {
@@ -512,49 +510,29 @@ func main() {
 					fmt.Println(err)
 					os.Exit(1)
 				}
-				defer gr.Close()
-
-				in, err := ioutil.ReadAll(gr)
-				if err != nil {
-					fmt.Println("Error reading from gzip file at " + input_uri + ".")
-					fmt.Println(err)
-					os.Exit(1)
-				}
-				//input_bytes = []byte(strings.TrimSpace(string(in)))
-				input_bytes = in
+				input_reader = gr
 
 			} else if strings.HasSuffix(input_path_expanded, ".osm.bz2") {
 
-				input_file, err := os.Open(input_path_expanded)
+				f, err := os.Open(input_path_expanded)
 				if err != nil {
 					fmt.Println("Error opening input file at " + input_uri + ".")
 					fmt.Println(err)
 					os.Exit(1)
 				}
-
-				br := bzip2.NewReader(bufio.NewReaderSize(input_file, read_buffer_size))
-
-				in, err := ioutil.ReadAll(br)
-				if err != nil {
-					fmt.Println("Error reading from bzip2 file at " + input_uri + ".")
-					fmt.Println(err)
-					os.Exit(1)
-				}
-				//input_bytes = []byte(strings.TrimSpace(string(in)))
-				input_bytes = in
-
-				input_file.Close()
+				input_file = f
+				input_reader = bzip2.NewReader(bufio.NewReaderSize(input_file, read_buffer_size))
 
 			} else if strings.HasSuffix(input_path_expanded, ".osm") {
 
-				in, err := ioutil.ReadFile(input_path_expanded)
+				f, err := os.Open(input_path_expanded)
 				if err != nil {
-					fmt.Println("Error reading from uri  " + input_uri + ".")
+					fmt.Println("Error opening input file at " + input_uri + ".")
 					fmt.Println(err)
 					os.Exit(1)
 				}
-				//input_bytes = []byte(strings.TrimSpace(string(in)))
-				input_bytes = in
+				input_file = f
+				input_reader = bufio.NewReaderSize(input_file, read_buffer_size)
 
 			} else if strings.HasSuffix(input_path_expanded, ".osm.pbf") {
 				fmt.Println("The OSM PBF format is not supported yet.")
@@ -591,7 +569,7 @@ func main() {
 					fmt.Println(err)
 					os.Exit(1)
 				}
-				input_bytes = in
+				input_reader = bytes.NewReader(in)
 
 			} else if strings.HasSuffix(input_s3_key, ".osm.pbf") {
 				fmt.Println("The OSM PBF format is not supported yet.")
@@ -609,19 +587,13 @@ func main() {
 	}
 
 	if profile {
-		logger.Info("Read data from " + input_uri + " in " + time.Since(start_read).String())
+		logger.Info("Opened file " + input_uri + " in " + time.Since(start_read).String())
 	}
 
 	planet := osm.NewPlanet()
 	if strings.HasSuffix(input_uri, ".pbf") {
 		fmt.Println("Protobuf not implemented yet.")
 		os.Exit(1)
-		//err = proto.Unmarshal(input_bytes, &planet)
-		//if err != nil {
-		//	fmt.Println("Error unmarhsalling input")
-		//	fmt.Println(err)
-		//	os.Exit(1)
-		//}
 	} else {
 
 		if verbose {
@@ -633,7 +605,7 @@ func main() {
 		start_unmarshal := time.Now()
 		err = osm.UnmarshalPlanet(
 			planet,
-			input_bytes,
+			input_reader,
 			stream,
 			outputConfig,
 			fi,
@@ -641,6 +613,9 @@ func main() {
 		if err != nil {
 			logger.Warn(errors.Wrap(err, "Error unmarhsalling input"))
 			os.Exit(1)
+		}
+		if input_file != nil {
+			input_file.Close()
 		}
 
 		if profile {
@@ -656,7 +631,17 @@ func main() {
 
 	if len(output_uri) > 0 {
 
-		if strings.HasSuffix(output_path, ".osm.gz") || strings.HasSuffix(output_path, ".osm") {
+		if output_uri == "stdout" || output_uri == "stderr" || strings.HasSuffix(output_path, ".osm") {
+			start_marshal := time.Now()
+			err := osm.MarshalPlanet(output_uri, output_scheme, output_path, outputConfig, planet)
+			if err != nil {
+				logger.Warn(errors.Wrap(err, "Error marshalling planet."))
+				os.Exit(1)
+			}
+			if profile {
+				logger.Info("Marshalled in " + time.Since(start_marshal).String())
+			}
+		} else if strings.HasSuffix(output_path, ".osm.gz") {
 			output_bytes := make([]byte, 0)
 			if pretty {
 				output_bytes, err = xml.MarshalIndent(planet, XML_PRETTY_PREFIX, XML_PRETTY_INDENT)

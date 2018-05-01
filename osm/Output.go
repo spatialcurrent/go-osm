@@ -10,6 +10,7 @@ type Output struct {
 	DropUserName  bool
 	KeysToKeep    []string
 	KeysToDrop    []string
+	Pretty        bool
 }
 
 func (o Output) HasDrop() bool {

@@ -1,8 +1,10 @@
 package osm
 
 import (
-	"bytes"
+	//"bytes"
 	"encoding/xml"
+	"io"
+	"io/ioutil"
 	//"fmt"
 	"time"
 )
@@ -15,16 +17,16 @@ import (
 	"github.com/spatialcurrent/go-dfl/dfl"
 )
 
-func UnmarshalPlanet(planet *Planet, input_bytes []byte, stream bool, output Output, filterInput FilterInput, ways_to_nodes bool) error {
+func UnmarshalPlanet(planet *Planet, input_reader io.Reader, stream bool, output Output, fi FilterInput, ways_to_nodes bool) error {
 
 	var dfl_cache *dfl.Cache
-	if filterInput.HasExpression() && filterInput.UseCache {
+	if fi.HasExpression() && fi.UseCache {
 		dfl_cache = dfl.NewCache()
 	}
 
 	if stream {
 
-		decoder := xml.NewDecoder(bytes.NewReader(input_bytes))
+		decoder := xml.NewDecoder(input_reader)
 		for {
 
 			t, _ := decoder.Token()
@@ -58,35 +60,37 @@ func UnmarshalPlanet(planet *Planet, input_bytes []byte, stream bool, output Out
 					}
 					planet.Bounds = b
 				case "node":
-					n, err := UnmarshalNode(decoder, e, output)
+					n, tags, err := UnmarshalNode(decoder, e, output)
 					if err != nil {
 						return err
 					}
+					n.SetTagsIndex(planet.AddTags(tags))
 					keep := true
 					if output.DropWays && output.DropRelations {
-						keep, err = n.Keep(filterInput, dfl_cache)
+						keep, err = KeepNode(planet, fi, n, dfl_cache)
 						if err != nil {
 							return err
 						}
 					}
 					if keep {
-						planet.AddNode(&n, ways_to_nodes)
+						planet.AddNode(n, ways_to_nodes)
 					}
 				case "way":
 					if !output.DropWays {
-						w, err := UnmarshalWay(decoder, e, output)
+						w, tags, err := UnmarshalWay(decoder, e, output)
 						if err != nil {
 							return err
 						}
-						keep, err := w.Keep(filterInput, dfl_cache)
+						w.SetTagsIndex(planet.AddTags(tags))
+						keep, err := KeepWay(planet, fi, w, dfl_cache)
 						if err != nil {
 							return err
 						}
 						if keep {
 							if ways_to_nodes {
-								planet.AddWayAsNode(&w)
+								planet.AddWayAsNode(w)
 							} else {
-								planet.AddWay(&w)
+								planet.AddWay(w)
 							}
 						}
 					}
@@ -104,9 +108,22 @@ func UnmarshalPlanet(planet *Planet, input_bytes []byte, stream bool, output Out
 		}
 
 		if !(output.DropWays && output.DropRelations) {
+			set_way_nodes := NewInt64Set()
+			for _, w := range planet.Ways {
+				for _, nr := range w.NodeReferences {
+					set_way_nodes.Add(nr.Reference)
+					//set_way_nodes[nr.Reference] = struct{}{}
+				}
+			}
+			slice_way_nodes := set_way_nodes.Slice(true)
 			nodes := make([]*Node, 0)
 			for _, n := range planet.Nodes {
-				keep, err := n.Keep(filterInput, dfl_cache)
+				keep := true
+				if slice_way_nodes.Contains(n.Id) {
+					nodes = append(nodes, n)
+					continue
+				}
+				keep, err := KeepNode(planet, fi, n, dfl_cache)
 				if err != nil {
 					return err
 				}
@@ -120,7 +137,11 @@ func UnmarshalPlanet(planet *Planet, input_bytes []byte, stream bool, output Out
 		//fmt.Println("DFL Cache:", dfl_cache)
 
 	} else {
-		err := xml.Unmarshal(input_bytes, planet)
+		input_bytes, err := ioutil.ReadAll(input_reader)
+		if err != nil {
+			return errors.Wrap(err, "Error reading input from reader.")
+		}
+		err = xml.Unmarshal(input_bytes, planet)
 		if err != nil {
 			return errors.Wrap(err, "Error unmarshalling input.")
 		}
@@ -135,7 +156,7 @@ func UnmarshalPlanet(planet *Planet, input_bytes []byte, stream bool, output Out
 
 		planet.DropAttributes(output)
 
-		planet.Filter(filterInput, dfl_cache)
+		planet.Filter(fi, dfl_cache)
 
 		if ways_to_nodes {
 			planet.ConvertWaysToNodes(false)
