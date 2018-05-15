@@ -5,6 +5,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 )
 
+// BucketExists checks in a bucket exists in AWS S3 with simplistic error checking
 func BucketExists(s3_client *s3.S3, bucket string) bool {
 
 	input := &s3.HeadBucketInput{

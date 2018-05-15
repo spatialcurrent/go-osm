@@ -10,53 +10,57 @@ import (
 	"github.com/pkg/errors"
 )
 
-func UnmarshalWay(decoder *xml.Decoder, e xml.StartElement, output Output) (*Way, []Tag, error) {
+// UnmarshalWay unmarshals a Way from an XML stream.
+// Returns the way's tags as a separate slice, so they can be cached
+func UnmarshalWay(decoder *xml.Decoder, e xml.StartElement, input *Input) (*Way, uint64, string, []Tag, error) {
 	w := NewWay()
+	user_id := uint64(0)
+	user_name := ""
 	tags := make([]Tag, 0)
 
 	for _, attr := range e.Attr {
 		switch attr.Name.Local {
 		case "id":
-			id, err := strconv.ParseInt(attr.Value, 10, 64)
+			id, err := strconv.ParseUint(attr.Value, 10, 64)
 			if err != nil {
-				return w, tags, errors.Wrap(err, "Error parsing way id")
+				return w, user_id, user_name, tags, errors.Wrap(err, "Error parsing way id")
 			}
 			w.Id = id
 		case "version":
-			if !output.DropVersion {
-				version, err := strconv.Atoi(attr.Value)
+			if !input.DropVersion {
+				version, err := strconv.ParseUint(attr.Value, 10, 16)
 				if err != nil {
-					return w, tags, errors.Wrap(err, "Error parsing way version")
+					return w, user_id, user_name, tags, errors.Wrap(err, "Error parsing way version")
 				}
-				w.Version = version
+				w.Version = uint16(version)
 			}
 		case "changeset":
-			if !output.DropChangeset {
-				changeset, err := strconv.ParseInt(attr.Value, 10, 64)
+			if !input.DropChangeset {
+				changeset, err := strconv.ParseUint(attr.Value, 10, 64)
 				if err != nil {
-					return w, tags, errors.Wrap(err, "Error parsing way changeset")
+					return w, user_id, user_name, tags, errors.Wrap(err, "Error parsing way changeset")
 				}
 				w.Changeset = changeset
 			}
 		case "timestamp":
-			if !output.DropTimestamp {
+			if !input.DropTimestamp {
 				ts, err := time.Parse(time.RFC3339, attr.Value)
 				if err != nil {
-					return w, tags, errors.Wrap(err, "Error parsing way timestamp")
+					return w, user_id, user_name, tags, errors.Wrap(err, "Error parsing way timestamp")
 				}
 				w.Timestamp = &ts
 			}
 		case "uid":
-			if !output.DropUserId {
-				uid, err := strconv.ParseInt(attr.Value, 10, 64)
+			if !input.DropUserId {
+				uid, err := strconv.ParseUint(attr.Value, 10, 64)
 				if err != nil {
-					return w, tags, errors.Wrap(err, "Error parsing way uid")
+					return w, user_id, user_name, tags, errors.Wrap(err, "Error parsing way uid")
 				}
-				w.UserId = uid
+				user_id = uid
 			}
 		case "user":
-			if !output.DropUserName {
-				w.UserName = attr.Value
+			if !input.DropUserName {
+				user_name = attr.Value
 			}
 		}
 	}
@@ -83,16 +87,16 @@ NodesAndTags:
 					}
 				}
 				keep := true
-				if len(output.KeysToKeep) > 0 {
+				if len(input.KeysToKeep) > 0 {
 					keep = false
-					for _, k := range output.KeysToKeep {
+					for _, k := range input.KeysToKeep {
 						if tag.Key == k {
 							keep = true
 							break
 						}
 					}
-				} else if len(output.KeysToDrop) > 0 {
-					for _, k := range output.KeysToDrop {
+				} else if len(input.KeysToDrop) > 0 {
+					for _, k := range input.KeysToDrop {
 						if tag.Key == k {
 							keep = false
 							break
@@ -107,9 +111,9 @@ NodesAndTags:
 				for _, attr := range e.Attr {
 					switch attr.Name.Local {
 					case "ref":
-						ref, err := strconv.ParseInt(attr.Value, 10, 64)
+						ref, err := strconv.ParseUint(attr.Value, 10, 64)
 						if err != nil {
-							return w, tags, errors.Wrap(err, "Error parsing node reference")
+							return w, user_id, user_name, tags, errors.Wrap(err, "Error parsing node reference for way.")
 						}
 						nr.Reference = ref
 					}
@@ -124,5 +128,5 @@ NodesAndTags:
 		}
 	}
 
-	return w, tags, nil
+	return w, user_id, user_name, tags, nil
 }

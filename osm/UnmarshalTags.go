@@ -4,6 +4,9 @@ import (
 	"encoding/xml"
 )
 
+// UnmarshalTags unmarshals a slice of tags from an XML stream
+// Called between a Node xml.StartElement and a Node xml.EndElement
+// Returns a slice of Tag
 func UnmarshalTags(decoder *xml.Decoder, keep_keys []string, drop_keys []string) []Tag {
 	tags := make([]Tag, 0)
 

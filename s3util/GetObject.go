@@ -16,6 +16,9 @@ import (
 	"github.com/pkg/errors"
 )
 
+// GetObject retrieves the contents of the object in S3 at the provided bucket and key
+// The contents of the file are read in full.
+// If the key ends in ".gz" or ".bz2", the contents are automatically uncompressed.
 func GetObject(s3_client *s3.S3, bucket string, key string) ([]byte, error) {
 	input := &s3.GetObjectInput{
 		Bucket: aws.String(bucket),

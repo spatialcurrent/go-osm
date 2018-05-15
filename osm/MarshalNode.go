@@ -11,14 +11,14 @@ import (
 	"github.com/pkg/errors"
 )
 
-func MarshalNode(encoder *xml.Encoder, planet *Planet, output_config Output, n *Node) error {
+func MarshalNode(encoder *xml.Encoder, planet *Planet, output_config *Output, n *Node) error {
 	attrs := []xml.Attr{
 		xml.Attr{Name: xml.Name{Space: "", Local: "id"}, Value: fmt.Sprint(n.Id)},
 		xml.Attr{Name: xml.Name{Space: "", Local: "lat"}, Value: strconv.FormatFloat(n.Latitude, 'f', 6, 64)},
 		xml.Attr{Name: xml.Name{Space: "", Local: "lon"}, Value: strconv.FormatFloat(n.Longitude, 'f', 6, 64)},
 	}
 	if !output_config.DropVersion {
-		attrs = append(attrs, xml.Attr{Name: xml.Name{Space: "", Local: "version"}, Value: strconv.Itoa(n.Version)})
+		attrs = append(attrs, xml.Attr{Name: xml.Name{Space: "", Local: "version"}, Value: fmt.Sprint(n.Version)})
 	}
 	if !output_config.DropTimestamp {
 		attrs = append(attrs, xml.Attr{Name: xml.Name{Space: "", Local: "timestamp"}, Value: n.Timestamp.Format(time.RFC3339)})
@@ -26,11 +26,11 @@ func MarshalNode(encoder *xml.Encoder, planet *Planet, output_config Output, n *
 	if !output_config.DropChangeset {
 		attrs = append(attrs, xml.Attr{Name: xml.Name{Space: "", Local: "changeset"}, Value: fmt.Sprint(n.Changeset)})
 	}
-	if !output_config.DropUserName {
+	if !output_config.DropUserId {
 		attrs = append(attrs, xml.Attr{Name: xml.Name{Space: "", Local: "uid"}, Value: fmt.Sprint(n.UserId)})
 	}
 	if !output_config.DropUserName {
-		attrs = append(attrs, xml.Attr{Name: xml.Name{Space: "", Local: "user"}, Value: fmt.Sprint(n.UserName)})
+		attrs = append(attrs, xml.Attr{Name: xml.Name{Space: "", Local: "user"}, Value: fmt.Sprint(planet.UserNames[n.UserId])})
 	}
 	token_node := xml.StartElement{
 		Name: xml.Name{Space: "", Local: "node"},

@@ -8,7 +8,12 @@ import (
 	"github.com/spatialcurrent/go-dfl/dfl"
 )
 
-func KeepNode(planet *Planet, fi FilterInput, n *Node, dfl_cache *dfl.Cache) (bool, error) {
+func KeepNode(planet *Planet, fi *Filter, n *Node, dfl_cache *dfl.Cache) (bool, error) {
+
+	if fi == nil {
+		return true, nil
+	}
+
 	m := planet.GetTagsAsMap(n.GetTagsIndex())
 	m["timestamp"] = n.Timestamp
 	m["version"] = n.Version

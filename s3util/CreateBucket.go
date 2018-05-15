@@ -5,6 +5,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 )
 
+// CreateBucket creates a bucket in AWS S3 with simplistic error checking
 func CreateBucket(s3_client *s3.S3, region string, bucket string) error {
 	input := &s3.CreateBucketInput{
 		Bucket: aws.String(bucket),

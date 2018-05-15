@@ -2,26 +2,29 @@ package main
 
 import (
 	"bufio"
-	"bytes"
-	"compress/bzip2"
-	"compress/gzip"
+	//"bytes"
+	//"compress/bzip2"
+	//"compress/gzip"
 	"encoding/json"
-	"encoding/xml"
+	//"encoding/xml"
 	"flag"
 	"fmt"
-	"io"
+	//"io"
 	//"io/ioutil"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 import (
 	"github.com/mitchellh/go-homedir"
 	"github.com/pkg/errors"
-	"gopkg.in/ini.v1"
+	//"gopkg.in/ini.v1"
+	"github.com/colinmarc/hdfs"
 )
 
 import (
@@ -40,28 +43,19 @@ import (
 import (
 	"github.com/spatialcurrent/go-osm/osm"
 	"github.com/spatialcurrent/go-osm/s3util"
-	"github.com/spatialcurrent/go-osm/xmlutil"
+	//"github.com/spatialcurrent/go-osm/xmlutil"
 )
 
-var GO_OSM_VERSION = "0.0.2"
-
-var SUPPORTED_SCHEMES = []string{
-	"file",
-	"http",
-	"https",
-	"s3",
-}
+var GO_OSM_VERSION = "0.0.3"
 
 var XML_PRETTY_PREFIX = ""
 var XML_PRETTY_INDENT = "    "
 
-func parse_uri(uri string, schemes []string) (string, string) {
-	for _, scheme := range schemes {
-		if strings.HasPrefix(strings.ToLower(uri), scheme+"://") {
-			return scheme, uri[len(scheme+"://"):]
-		}
-	}
-	return "file", uri
+var GDAL_INI_KEYS = []string{"osm_version", "osm_changeset", "osm_timestamp", "osm_id", "osm_user", "osm_attributes"}
+
+type Message struct {
+	Message string
+	Fields  map[string]interface{}
 }
 
 func connect_to_aws(aws_access_key_id string, aws_secret_access_key string, aws_region string) *session.Session {
@@ -75,7 +69,7 @@ func connect_to_aws(aws_access_key_id string, aws_secret_access_key string, aws_
 	return aws_session
 }
 
-func dfl_build_funcs() dfl.FunctionMap {
+func dfl_build_funcs() *dfl.FunctionMap {
 	funcs := dfl.FunctionMap{}
 
 	funcs["len"] = func(ctx dfl.Context, args []string) (interface{}, error) {
@@ -85,33 +79,7 @@ func dfl_build_funcs() dfl.FunctionMap {
 		return len(args[0]), nil
 	}
 
-	return funcs
-}
-
-func parse_slice_string(in string) []string {
-	out := make([]string, 0)
-	if len(in) > 0 {
-		out = strings.Split(in, ",")
-	}
-	return out
-}
-
-func parse_slice_float64(in string) ([]float64, error) {
-	out := make([]float64, 0)
-	if len(in) > 0 {
-		for _, s := range strings.Split(in, ",") {
-			v, err := strconv.ParseFloat(s, 64)
-			if err != nil {
-				return out, err
-			}
-			out = append(out, v)
-		}
-	}
-	return out, nil
-}
-
-func parse_bool(in string) bool {
-	return in == "yes" || in == "true" || in == "y" || in == "1" || in == "t"
+	return &funcs
 }
 
 func main() {
@@ -124,9 +92,12 @@ func main() {
 	var aws_access_key_id string
 	var aws_secret_access_key string
 
-	var input_uri string
+	var config_uri string
 
-	var ini_uri string
+	var input_uri_text string
+
+	var gdal_ini_uri string
+	var gdal_ini_section string
 
 	var filter_keys_keep_text string
 	var filter_keys_drop_text string
@@ -140,8 +111,9 @@ func main() {
 
 	// ---------------------------------------------------------
 	// Output flags
-	var output_uri string
+	var output_uri_text string
 	var drop_text string
+	var drop_nodes bool
 	var drop_ways bool
 	var drop_relations bool
 	var drop_version bool
@@ -158,8 +130,6 @@ func main() {
 	var summarize_keys_text string
 
 	var pretty bool
-	var stream bool
-	var async bool
 
 	var read_buffer_size int
 
@@ -184,9 +154,13 @@ func main() {
 		aws_secret_access_key = os.Getenv("AWS_SECRET_ACCESS_KEY")
 	}
 
+	// Config Flags
+	flag.StringVar(&config_uri, "config_uri", "", "Config uri.  Uri to config file.  If given, ignores most command line flags.  Defaults to value of environment variable GO_OSM_CONFIG_URI.")
+
 	// Input Flags
-	flag.StringVar(&input_uri, "input_uri", "", "Input uri.  \"stdin\" or uri to input file.")
-	flag.StringVar(&ini_uri, "ini_uri", "", "Uri to ini file.")
+	flag.StringVar(&input_uri_text, "input_uri", "", "A single or colon-separated list of input uris.  Supports wildcards.  \"stdin\" or uri to input file.")
+	flag.StringVar(&gdal_ini_uri, "gdal_ini_uri", "", "Uri to GDAL ini file for convience.  See http://www.gdal.org/drv_osm.html.")
+	flag.StringVar(&gdal_ini_section, "gdal_ini_section", "points", "Section to parse in GDAL in file.  See http://www.gdal.org/drv_osm.html.")
 
 	// Filter Flags
 	flag.StringVar(&filter_keys_keep_text, "filter_keys_keep", "", "Only keep nodes or ways that have a key in the provided comma-separated list of keys")
@@ -201,6 +175,7 @@ func main() {
 
 	flag.StringVar(&drop_text, "drop", "", "Convenience flag.  A comma-separated list of features or attributes to drop: ways, relations, version, timestamp, changeset, uid, user, author")
 
+	flag.BoolVar(&drop_nodes, "drop_nodes", false, "Drop nodes from output")
 	flag.BoolVar(&drop_ways, "drop_ways", false, "Drop ways from output")
 	flag.BoolVar(&drop_relations, "drop_relations", false, "Drop relations from output")
 
@@ -212,16 +187,13 @@ func main() {
 	flag.BoolVar(&drop_author, "drop_author", false, "Drop author.  Synonymous to drop_uid and drop_user")
 
 	// Output Flags
-	flag.StringVar(&output_uri, "output_uri", "", "Output uri. \"stdout\", \"stderr\", or uri to output file.")
+	flag.StringVar(&output_uri_text, "output_uri", "", "A single or colon-separated list of uutput uris. \"stdout\", \"stderr\", or uri to output file.")
 	flag.StringVar(&output_keys_keep_text, "output_keys_keep", "", "Comma-separated list of tag keys to keep in output.  Drop all other keys.")
 	flag.StringVar(&output_keys_drop_text, "output_keys_drop", "", "Comma-separated list of keys to drop in output.  Keep everything else.")
 
 	flag.BoolVar(&summarize, "summarize", false, "Print data summary to stdout (bounding box, number of nodes, number of ways, and number of relations)")
 	flag.StringVar(&summarize_keys_text, "summarize_keys", "", "Comma-separated list of keys to summarize")
 	flag.BoolVar(&pretty, "pretty", false, "Pretty output.  Adds indents.")
-
-	flag.BoolVar(&stream, "stream", false, "Stream input.")
-	flag.BoolVar(&async, "async", false, "Process input using async functions.")
 
 	flag.IntVar(&read_buffer_size, "read_buffer_size", 4096, "Size of buffer when reading files from disk")
 
@@ -234,10 +206,53 @@ func main() {
 
 	flag.Parse()
 
-	drop := parse_slice_string(drop_text)
-	filter_keys_keep := parse_slice_string(filter_keys_keep_text)
-	filter_keys_drop := parse_slice_string(filter_keys_drop_text)
+	if help {
+		fmt.Println("Usage: osm -input_uri INPUT[:INPUT_2][:INPUT_3] -output_uri OUTPUT [-verbose] [-dry_run] [-version] [-help] [A=1] [B=2]")
+		fmt.Println("Supported Schemes: " + strings.Join(osm.SUPPORTED_SCHEMES, ", "))
+		fmt.Println("Supported Input File Extensions: .osm, .osm.gz, .osm.bz2")
+		fmt.Println("Supported Output File Extensions: .osm, .osm.gz, .geojson, .geojson.gz")
+		fmt.Println("Options:")
+		flag.PrintDefaults()
+		os.Exit(0)
+	} else if version {
+		fmt.Println(GO_OSM_VERSION)
+		os.Exit(0)
+	} else if len(os.Args) == 1 {
+		fmt.Println("Error: Provided no arguments.")
+		fmt.Println("Run \"osm --help\" for more information.")
+		os.Exit(0)
+	}
 
+	ctx := map[string]interface{}{}
+	for _, a := range flag.Args() {
+		if !strings.Contains(a, "=") {
+			fmt.Println("Context attribute \"" + a + "\" does not contain \"=\".")
+			os.Exit(1)
+		}
+		parts := strings.SplitN(a, "=", 2)
+		ctx[parts[0]] = dfl.TryConvertString(parts[1])
+	}
+
+	if len(config_uri) == 0 {
+		config_uri = os.Getenv("GO_OSM_CONFIG_URI")
+	}
+
+	if len(input_uri_text) == 0 {
+		input_uri_text = os.Getenv("GO_OSM_INPUT_URI")
+	}
+
+	funcs := dfl_build_funcs()
+
+	filter_keys_keep := osm.ParseSliceString(filter_keys_keep_text)
+	filter_keys_drop := osm.ParseSliceString(filter_keys_drop_text)
+
+	if len(filter_keys_keep) > 0 && len(filter_keys_drop) > 0 {
+		fmt.Println("-filter_keys_keep (" + filter_keys_keep_text + ") and -filter_keys_drop (" + filter_keys_drop_text + ") are mutually exclusive")
+		os.Exit(1)
+	}
+
+	drop := osm.ParseSliceString(drop_text)
+	drop_nodes = drop_nodes || stringSliceContains(drop, "nodes")
 	drop_ways = drop_ways || stringSliceContains(drop, "ways")
 	drop_relations = drop_relations || stringSliceContains(drop, "relations")
 	drop_timestamp = drop_timestamp || stringSliceContains(drop, "timestamp")
@@ -247,213 +262,158 @@ func main() {
 	drop_uid = drop_uid || stringSliceContains(drop, "uid")
 	drop_user = drop_user || stringSliceContains(drop, "user")
 
-	if len(filter_keys_keep) > 0 && len(filter_keys_drop) > 0 {
-		fmt.Println("-filter_keys_keep (" + filter_keys_keep_text + ") and -filter_keys_drop (" + filter_keys_drop_text + ") are mutually exclusive")
-		os.Exit(1)
-	}
-
-	bbox, err := parse_slice_float64(bbox_text)
-	if err != nil {
-		fmt.Println("Invalid bounding box " + bbox_text)
-		os.Exit(1)
-	}
-
-	if len(bbox) != 0 && len(bbox) != 4 {
-		fmt.Println("Invalid length of bounding box " + bbox_text)
-		os.Exit(1)
-	}
-
 	if drop_author {
 		drop_uid = true
 		drop_user = true
 	}
 
-	outputConfig := osm.Output{
-		DropWays:      drop_ways,
-		DropRelations: drop_relations,
-		DropVersion:   drop_version,
-		DropChangeset: drop_changeset,
-		DropTimestamp: drop_timestamp,
-		DropUserId:    drop_uid,
-		DropUserName:  drop_user,
-		KeysToKeep:    []string{},
-		KeysToDrop:    []string{},
-		Pretty:        pretty,
-	}
-
-	if len(ini_uri) > 0 {
-		ini_scheme, ini_path := parse_uri(ini_uri, []string{"file"})
-		if ini_scheme == "file" {
-			ini_path_expanded, err := homedir.Expand(ini_path)
-			if err != nil {
-				fmt.Println("Error expanding ini path " + ini_uri)
-				os.Exit(1)
-			}
-			cfg, err := ini.Load(ini_path_expanded)
-			if err != nil {
-				fmt.Printf("Fail to read file: %v", err)
-				os.Exit(1)
-			}
-			outputConfig.DropVersion = !parse_bool(cfg.Section("points").Key("osm_version").String())
-			outputConfig.DropChangeset = !parse_bool(cfg.Section("points").Key("osm_changeset").String())
-			outputConfig.DropTimestamp = !parse_bool(cfg.Section("points").Key("osm_timestamp").String())
-			outputConfig.DropUserId = !parse_bool(cfg.Section("points").Key("osm_id").String())
-			outputConfig.DropUserName = !parse_bool(cfg.Section("points").Key("osm_user").String())
-			outputConfig.KeysToKeep = parse_slice_string(cfg.Section("points").Key("attributes").String())
-		}
-	}
-
-	// Parse Output Flags
-	if len(output_keys_keep_text) > 0 {
-		outputConfig.KeysToKeep = parse_slice_string(output_keys_keep_text)
-	}
-	if len(output_keys_drop_text) > 0 {
-		outputConfig.KeysToDrop = parse_slice_string(output_keys_drop_text)
-	}
-
-	if len(outputConfig.KeysToKeep) > 0 && len(outputConfig.KeysToDrop) > 0 {
-		fmt.Println("-output_keys_keep (" + output_keys_keep_text + ") and -output_keys_drop (" + output_keys_drop_text + ") are mutually exclusive")
+	if drop_uid && !drop_user {
+		fmt.Println("You cannot drop the user id but keep the user name.")
 		os.Exit(1)
 	}
 
-	// Parse Summarize Flags
-	summarize_keys := parse_slice_string(summarize_keys_text)
+	var config *osm.Config
+	if len(config_uri) > 0 {
 
-	if help {
-		fmt.Println("Usage: osm -input_uri INPUT -output_uri OUTPUT [-verbose] [-dry_run] [-version] [-help]")
-		fmt.Println("Supported Schemes: " + strings.Join(SUPPORTED_SCHEMES, ", "))
-		fmt.Println("Supported Input File Extensions: .osm, .osm.gz, .osm.bz2")
-		fmt.Println("Supported Output File Extensions: .osm, .osm.gz, .geojson, .geojson.gz")
-		fmt.Println("Options:")
-		flag.PrintDefaults()
-		os.Exit(0)
-	} else if len(os.Args) == 1 {
-		fmt.Println("Error: Provided no arguments.")
-		fmt.Println("Run \"osm --help\" for more information.")
-		os.Exit(0)
-	} else if flag.NArg() > 0 {
-		fmt.Println("Error: Provided extra command line arguments:", strings.Join(flag.Args(), ", "))
-		fmt.Println("Run \"osm --help\" for more information.")
-		os.Exit(0)
-	}
-
-	if version {
-		fmt.Println(GO_OSM_VERSION)
-		os.Exit(0)
-	}
-
-	if len(input_uri) == 0 {
-		fmt.Println("Error: input_uri or version option is required.")
-		fmt.Println("Run \"osm --help\" for more information.")
-		os.Exit(1)
-	}
-
-	if ways_to_nodes && drop_ways {
-		fmt.Println("Error: cannot enable ways_to_nodes and drop_ways at the same time.")
-		os.Exit(1)
-	}
-
-	output_scheme := "" // stdin, stdout, stderr, file, http, https, s3
-	output_path := ""
-
-	if len(output_uri) > 0 {
-		if output_uri == "stdout" {
-			output_scheme = "stdout"
-		} else if output_uri == "stderr" {
-			output_scheme = "stderr"
-		} else {
-			output_scheme, output_path = parse_uri(output_uri, SUPPORTED_SCHEMES)
-		}
-	}
-
-	output_path_expanded := ""
-	output_exists := false
-
-	var aws_session *session.Session
-	var s3_client *s3.S3
-	output_s3_bucket := ""
-	output_s3_key := ""
-
-	if output_scheme == "file" {
-
-		p, err := homedir.Expand(output_path)
+		c, err := osm.LoadConfig(config_uri)
 		if err != nil {
-			fmt.Println("Error expanding output path")
-			os.Exit(1)
-		}
-		output_path_expanded = p
-
-		if _, err := os.Stat(output_path_expanded); os.IsNotExist(err) {
-			output_exists = false
-		} else {
-			output_exists = true
-		}
-
-	} else if output_scheme == "s3" {
-
-		aws_session = connect_to_aws(aws_access_key_id, aws_secret_access_key, aws_default_region)
-		s3_client = s3.New(aws_session)
-		b, k, err := s3util.ParsePath(output_path)
-		if err != nil {
-			fmt.Println("Error parsing AWS S3 path")
+			fmt.Println("Error loading config.")
 			fmt.Println(err)
 			os.Exit(1)
 		}
-		output_s3_bucket = b
-		output_s3_key = k
-		output_exists = s3util.ObjectExists(s3_client, output_s3_bucket, output_s3_key)
+
+		if len(input_uri_text) > 0 {
+			input_configs := make([]osm.InputConfig, 0)
+			input_uris := strings.Split(input_uri_text, ":")
+			for _, input_uri := range input_uris {
+				scheme, input_path_glob := osm.SplitUri(input_uri, osm.SUPPORTED_SCHEMES)
+				if scheme == "file" && strings.Contains(input_path_glob, "*") {
+					input_path_expanded, err := homedir.Expand(input_path_glob)
+					if err != nil {
+						fmt.Println(errors.Wrap(err, "Error expanding input file path"))
+						os.Exit(1)
+					}
+					input_paths, err := filepath.Glob(input_path_expanded)
+					if err != nil {
+						fmt.Println(errors.Wrap(err, "Error globing input_uri "+input_uri))
+						os.Exit(1)
+					}
+					for _, input_path := range input_paths {
+						input_filter := osm.NewFilter(filter_keys_keep, filter_keys_drop, "", true, []float64{})
+						input_config := osm.NewInputConfig(input_path, drop_nodes, drop_ways, drop_relations, input_filter)
+						input_configs = append(input_configs, input_config)
+					}
+				} else {
+					input_filter := osm.NewFilter(filter_keys_keep, filter_keys_drop, "", true, []float64{})
+					input_config := osm.NewInputConfig(input_uri, drop_nodes, drop_ways, drop_relations, input_filter)
+					input_configs = append(input_configs, input_config)
+				}
+			}
+			c.InputConfigs = input_configs
+		}
+
+		config = c
 
 	} else {
-		output_path_expanded = output_path
-	}
 
-	if output_exists {
-		if !overwrite {
-			fmt.Println("Output file already exists at output location " + output_uri + ".")
-			fmt.Println("If you'd like to overwrite this file, then set the overwrite command line flag.")
-			fmt.Println("Run \"osm --help\" for more information.")
+		bbox, err := osm.ParseSliceFloat64(bbox_text)
+		if err != nil {
+			fmt.Println("Invalid bounding box " + bbox_text)
 			os.Exit(1)
-		} else if verbose {
-			fmt.Println("File already exists at output location " + output_uri + ".")
 		}
-	}
 
-	if dry_run {
-		os.Exit(0)
-	}
-
-	if output_exists && overwrite {
-		if output_scheme == "file" {
-			err := os.Remove(output_path_expanded)
-			if err != nil {
-				fmt.Println("Error deleting existing file at output location " + output_uri + ".")
-				fmt.Println(err)
-				os.Exit(1)
-			}
-			if verbose {
-				fmt.Println("Deleted existing file at output location " + output_uri + ".")
-			}
-		} else if output_scheme == "s3" {
-			err := s3util.DeleteObject(s3_client, output_s3_bucket, output_s3_key)
-			if err != nil {
-				fmt.Println("Error deleting existing object on AWS S3 at output location " + output_uri + ".")
-				fmt.Println(err)
-				os.Exit(1)
-			}
-			if verbose {
-				fmt.Println("Deleted existing object on AWS S3 at output location " + output_uri + ".")
-			}
+		if len(bbox) != 0 && len(bbox) != 4 {
+			fmt.Println("Invalid length of bounding box " + bbox_text)
+			os.Exit(1)
 		}
-	}
 
-	if !output_exists && output_scheme == "s3" {
-		if !s3util.BucketExists(s3_client, output_s3_bucket) {
-			err := s3util.CreateBucket(s3_client, aws_default_region, output_s3_bucket)
-			if err != nil {
-				fmt.Println("Error creating AWS S3 bucket.")
-				os.Exit(1)
+		input_filter := osm.NewFilter(filter_keys_keep, filter_keys_drop, filter_dfl_exp_text, filter_dfl_use_cache, bbox)
+
+		input_configs := make([]osm.InputConfig, 0)
+		if len(input_uri_text) > 0 {
+			input_uris := strings.Split(input_uri_text, ":")
+			for _, input_uri := range input_uris {
+				scheme, input_path_glob := osm.SplitUri(input_uri, osm.SUPPORTED_SCHEMES)
+				if scheme == "file" && strings.Contains(input_path_glob, "*") {
+					input_path_expanded, err := homedir.Expand(input_path_glob)
+					if err != nil {
+						fmt.Println(errors.Wrap(err, "Error expanding input file path"))
+						os.Exit(1)
+					}
+					input_paths, err := filepath.Glob(input_path_expanded)
+					if err != nil {
+						fmt.Println(errors.Wrap(err, "Error globing input_uri "+input_uri))
+						os.Exit(1)
+					}
+					for _, input_path := range input_paths {
+						input_filter := osm.NewFilter(filter_keys_keep, filter_keys_drop, "", true, []float64{})
+						input_config := osm.NewInputConfig(input_path, drop_nodes, drop_ways, drop_relations, input_filter)
+						input_configs = append(input_configs, input_config)
+					}
+				} else {
+					input_config := osm.NewInputConfig(input_uri, drop_nodes, drop_ways, drop_relations, input_filter)
+					input_configs = append(input_configs, input_config)
+				}
 			}
 		}
+
+		output_configs := make([]osm.OutputConfig, 0)
+		if len(output_uri_text) > 0 {
+			output_uris := strings.Split(output_uri_text, ":")
+			for _, output_uri := range output_uris {
+				output_configs = append(output_configs, osm.NewOutputConfig(
+					output_uri,
+					input_filter,
+					drop_ways,
+					drop_nodes,
+					drop_relations,
+					drop_version,
+					drop_changeset,
+					drop_timestamp,
+					drop_uid,
+					drop_user,
+					ways_to_nodes,
+					pretty,
+				))
+			}
+		}
+
+		if len(gdal_ini_uri) > 0 {
+			gdal_ini, err := osm.LoadIniSection(gdal_ini_uri, gdal_ini_section, GDAL_INI_KEYS)
+			if err != nil {
+				fmt.Println(gdal_ini)
+				os.Exit(1)
+			}
+			for _, outputConfig := range output_configs {
+				outputConfig.DropVersion = !osm.ParseBool(gdal_ini["osm_version"])
+				outputConfig.DropChangeset = !osm.ParseBool(gdal_ini["osm_changeset"])
+				outputConfig.DropTimestamp = !osm.ParseBool(gdal_ini["osm_timestamp"])
+				outputConfig.DropUserId = !osm.ParseBool(gdal_ini["osm_uid"])
+				outputConfig.DropUserName = !osm.ParseBool(gdal_ini["osm_user"])
+				outputConfig.KeysToKeep = osm.ParseSliceString(gdal_ini["attributes"])
+			}
+		}
+
+		for _, outputConfig := range output_configs {
+			// Parse Output Flags
+			if len(output_keys_keep_text) > 0 {
+				outputConfig.KeysToKeep = osm.ParseSliceString(output_keys_keep_text)
+			}
+			if len(output_keys_drop_text) > 0 {
+				outputConfig.KeysToDrop = osm.ParseSliceString(output_keys_drop_text)
+			}
+
+			if len(outputConfig.KeysToKeep) > 0 && len(outputConfig.KeysToDrop) > 0 {
+				fmt.Println("-output_keys_keep (" + output_keys_keep_text + ") and -output_keys_drop (" + output_keys_drop_text + ") are mutually exclusive")
+				os.Exit(1)
+			}
+		}
+
+		config = &osm.Config{
+			InputConfigs:  input_configs,
+			OutputConfigs: output_configs,
+		}
+
 	}
 
 	logger, err := compositelogger.NewDefaultLogger()
@@ -463,255 +423,355 @@ func main() {
 		os.Exit(1)
 	}
 
-	var filter_dfl_exp dfl.Node
-	if len(filter_dfl_exp_text) > 0 {
-		filter_dfl_exp, err = dfl.Parse(filter_dfl_exp_text)
-		if err != nil {
-			fmt.Println("Error parsing DFL filter expression", filter_dfl_exp_text)
-			fmt.Println(err)
-			os.Exit(1)
-		}
-		filter_dfl_exp = filter_dfl_exp.Compile()
+	// Initialize config, including input & output resources
+	if verbose {
+		logger.Info("Initializing...")
 	}
 
-	funcs := dfl_build_funcs()
+	err = config.Init(ctx, funcs)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
 
-	start_read := time.Now()
+	if verbose {
 
-	var input_file *os.File
-	var input_reader io.Reader
-	if input_uri == "stdin" {
-		input_reader = bufio.NewReader(os.Stdin)
-	} else {
+		logger.InfoWithFields("Config", map[string]interface{}{
+			"Inputs":           len(config.Inputs),
+			"Outputs":          len(config.Outputs),
+			"AllWaysToNodes":   config.ConvertAllWaysToNodes,
+			"DropAllNodes":     config.DropAllNodes,
+			"DropAllWays":      config.DropAllWays,
+			"DropAllRelations": config.DropAllRelations,
+		})
 
-		input_scheme, input_path := parse_uri(input_uri, SUPPORTED_SCHEMES)
+		for i, input := range config.Inputs {
+			fields := map[string]interface{}{"uri": input.Uri}
+			if input.Filter != nil {
+				fields["filter_keys_keep"] = strings.Join(input.Filter.KeysToKeep, ",")
+			}
+			logger.InfoWithFields("Input "+strconv.Itoa(i), fields)
+		}
+		for i, output := range config.Outputs {
+			logger.InfoWithFields("Output "+strconv.Itoa(i), map[string]interface{}{"uri": output.Uri})
+		}
+	}
 
-		if input_scheme == "file" {
+	// Parse Summarize Flags
+	summarize_keys := osm.ParseSliceString(summarize_keys_text)
 
-			input_path_expanded, err := homedir.Expand(input_path)
+	err = config.Validate()
+	if err != nil {
+		fmt.Println(err)
+		fmt.Println("Run \"osm --help\" for more information.")
+		os.Exit(1)
+	}
+
+	var aws_session *session.Session
+	var s3_client *s3.S3
+
+	hdfs_clients := map[string]*hdfs.Client{}
+
+	if config.HasResourceType("s3") {
+		aws_session = connect_to_aws(aws_access_key_id, aws_secret_access_key, aws_default_region)
+		s3_client = s3.New(aws_session)
+	}
+
+	if config.HasResourceType("hdfs") {
+		for _, nameNode := range config.GetNameNodes() {
+			hdfs_client, err := hdfs.New(nameNode)
 			if err != nil {
-				fmt.Println("Error expanding path")
+				logger.Warn(errors.Wrap(err, "Could not connect to HDFS name node with domain "+nameNode+"."))
 				os.Exit(1)
 			}
+			hdfs_clients[nameNode] = hdfs_client
+		}
+	}
 
-			if strings.HasSuffix(input_path_expanded, ".osm.gz") {
+	for _, input := range config.Inputs {
 
-				f, err := os.Open(input_path_expanded)
-				if err != nil {
-					fmt.Println("Error opening input file at " + input_uri + ".")
-					fmt.Println(err)
-					os.Exit(1)
-				}
-				input_file = f
+		switch input.GetType() {
+		case "file":
+			input.Exists = input.FileExists()
+		case "hdfs":
+			_, err := hdfs_clients[input.NameNode].Stat(input.Path)
+			input.Exists = !os.IsNotExist(err)
+		case "s3":
+			input.Exists = s3util.ObjectExists(s3_client, input.Bucket, input.Key)
+		}
 
-				gr, err := gzip.NewReader(input_file)
-				if err != nil {
-					fmt.Println("Error creating gzip reader for file at " + input_uri + ".")
-					fmt.Println(err)
-					os.Exit(1)
-				}
-				input_reader = gr
+		if !input.Exists {
+			fmt.Println("Input at uri " + input.Uri + " does not exist.")
+		}
+	}
 
-			} else if strings.HasSuffix(input_path_expanded, ".osm.bz2") {
+	for _, output := range config.Outputs {
 
-				f, err := os.Open(input_path_expanded)
-				if err != nil {
-					fmt.Println("Error opening input file at " + input_uri + ".")
-					fmt.Println(err)
-					os.Exit(1)
-				}
-				input_file = f
-				input_reader = bzip2.NewReader(bufio.NewReaderSize(input_file, read_buffer_size))
+		switch output.GetType() {
+		case "file":
+			output.Exists = output.FileExists()
+		case "hdfs":
+			_, err := hdfs_clients[output.NameNode].Stat(output.Path)
+			output.Exists = !os.IsNotExist(err)
+		case "s3":
+			output.Exists = s3util.ObjectExists(s3_client, output.Bucket, output.Key)
+		}
 
-			} else if strings.HasSuffix(input_path_expanded, ".osm") {
-
-				f, err := os.Open(input_path_expanded)
-				if err != nil {
-					fmt.Println("Error opening input file at " + input_uri + ".")
-					fmt.Println(err)
-					os.Exit(1)
-				}
-				input_file = f
-				input_reader = bufio.NewReaderSize(input_file, read_buffer_size)
-
-			} else if strings.HasSuffix(input_path_expanded, ".osm.pbf") {
-				fmt.Println("The OSM PBF format is not supported yet.")
+		if (!output.IsType("stream")) && output.Exists {
+			if !overwrite {
+				fmt.Println("Output file already exists at output location " + output.Uri + ".")
+				fmt.Println("If you'd like to overwrite this file, then set the overwrite command line flag.")
+				fmt.Println("Run \"osm --help\" for more information.")
 				os.Exit(1)
-			} else if strings.HasSuffix(input_path_expanded, ".o5m") {
-				fmt.Println("The o5m format is not supported yet.")
-				os.Exit(1)
-			} else {
-				fmt.Println("Unknown file extension for input at " + input_uri + ".")
-				os.Exit(1)
+			} else if verbose {
+				fmt.Println("File already exists at output location " + output.Uri + ".")
 			}
-
-		} else if input_scheme == "s3" {
-
-			if s3_client == nil {
-				if aws_session == nil {
-					aws_session = connect_to_aws(aws_access_key_id, aws_secret_access_key, aws_default_region)
-				}
-				s3_client = s3.New(aws_session)
-			}
-
-			input_s3_bucket, input_s3_key, err := s3util.ParsePath(input_path)
-			if err != nil {
-				fmt.Println("Error parsing AWS S3 path")
-				fmt.Println(err)
-				os.Exit(1)
-			}
-
-			if strings.HasSuffix(input_s3_key, ".osm.gz") || strings.HasSuffix(input_s3_key, ".osm.bz2") || strings.HasSuffix(input_s3_key, ".osm") {
-
-				in, err := s3util.GetObject(s3_client, input_s3_bucket, input_s3_key)
-				if err != nil {
-					fmt.Println("Error reading from AWS S3 uri " + input_uri + ".")
-					fmt.Println(err)
-					os.Exit(1)
-				}
-				input_reader = bytes.NewReader(in)
-
-			} else if strings.HasSuffix(input_s3_key, ".osm.pbf") {
-				fmt.Println("The OSM PBF format is not supported yet.")
-				os.Exit(1)
-			} else if strings.HasSuffix(input_s3_key, ".o5m") {
-				fmt.Println("The o5m format is not supported yet.")
-				os.Exit(1)
-			} else {
-				fmt.Println("Unknown file extension for input at " + input_uri + ".")
-				os.Exit(1)
-			}
-
 		}
 
 	}
 
-	if profile {
-		logger.Info("Opened file " + input_uri + " in " + time.Since(start_read).String())
+	if dry_run {
+		os.Exit(0)
+	}
+
+	if overwrite {
+		for _, output := range config.Outputs {
+			if (!output.IsType("stream")) && output.Exists {
+				switch output.GetType() {
+				case "file":
+					err := os.Remove(output.PathExpanded)
+					if err != nil {
+						fmt.Println("Error deleting existing file at output location " + output.Uri + ".")
+						fmt.Println(err)
+						os.Exit(1)
+					}
+					if verbose {
+						fmt.Println("Deleted existing file at output location " + output.Uri + ".")
+					}
+				case "hdfs":
+					err := hdfs_clients[output.NameNode].Remove(output.PathExpanded)
+					if err != nil {
+						fmt.Println(errors.Wrap(err, "Error deleting file on HDFS at uri "+output.Uri))
+						os.Exit(1)
+					}
+				case "s3":
+					err := s3util.DeleteObject(s3_client, output.Bucket, output.Key)
+					if err != nil {
+						fmt.Println(errors.Wrap(err, "Error deleting existing object on AWS S3 at output location "+output.Uri+"."))
+						os.Exit(1)
+					}
+					if verbose {
+						fmt.Println("Deleted existing object on AWS S3 at output location " + output.Uri + ".")
+					}
+				}
+			}
+		}
+	}
+
+	for _, output := range config.Outputs {
+		if output.IsType("file") && !output.Exists {
+			basepath := filepath.Dir(output.PathExpanded)
+			if _, err := os.Stat(basepath); os.IsNotExist(err) {
+				if verbose {
+					logger.InfoWithFields("Creating parent directory for output.", map[string]interface{}{"path": basepath})
+				}
+				err := os.MkdirAll(basepath, os.ModePerm)
+				if err != nil {
+					fmt.Println(errors.Wrap(err, "Error creating parent directory for "+output.Uri))
+					os.Exit(1)
+				}
+			}
+		} else if output.IsType("hdfs") && !output.Exists {
+			basepath := filepath.Dir(output.PathExpanded)
+			if _, err := hdfs_clients[output.NameNode].Stat(output.PathExpanded); os.IsNotExist(err) {
+				if verbose {
+					logger.InfoWithFields("Creating parent directory for output.", map[string]interface{}{"path": basepath})
+				}
+				err := hdfs_clients[output.NameNode].MkdirAll(basepath, os.ModePerm)
+				if err != nil {
+					fmt.Println(errors.Wrap(err, "Error creating parent directory for "+output.Uri))
+					os.Exit(1)
+				}
+			}
+		} else if output.IsType("s3") && !output.Exists {
+			if !s3util.BucketExists(s3_client, output.Bucket) {
+				err := s3util.CreateBucket(s3_client, aws_default_region, output.Bucket)
+				if err != nil {
+					fmt.Println("Error creating AWS S3 bucket.")
+					os.Exit(1)
+				}
+			}
+		}
 	}
 
 	planet := osm.NewPlanet()
-	if strings.HasSuffix(input_uri, ".pbf") {
-		fmt.Println("Protobuf not implemented yet.")
+
+	err = planet.Init()
+	if err != nil {
+		fmt.Println(errors.Wrap(err, "Error initializing planet"))
 		os.Exit(1)
-	} else {
+	}
 
-		if verbose {
-			logger.Info("Unmarshalling planet file")
-		}
+	for i, input := range config.Inputs {
 
-		fi := osm.NewFilterInput(filter_keys_keep, filter_keys_drop, filter_dfl_exp, funcs, filter_dfl_use_cache, bbox)
+		start_read := time.Now()
 
-		start_unmarshal := time.Now()
-		err = osm.UnmarshalPlanet(
-			planet,
-			input_reader,
-			stream,
-			outputConfig,
-			fi,
-			ways_to_nodes)
+		err := input.Open(read_buffer_size, s3_client, hdfs_clients)
 		if err != nil {
-			logger.Warn(errors.Wrap(err, "Error unmarhsalling input"))
+			fmt.Println(errors.Wrap(err, "Error opening input file at "+input.Uri))
 			os.Exit(1)
-		}
-		if input_file != nil {
-			input_file.Close()
 		}
 
 		if profile {
-			logger.Info("Unmarshalled in " + time.Since(start_unmarshal).String())
+			logger.InfoWithFields("Opened input "+strconv.Itoa(i), map[string]interface{}{"uri": input.Uri, "duration": time.Since(start_read).String()})
 		}
 
+		if verbose {
+			logger.InfoWithFields("Importing data from planet file", map[string]interface{}{
+				"uri":            input.Uri,
+				"drop_nodes":     input.DropNodes,
+				"drop_ways":      input.DropWays,
+				"drop_relations": input.DropRelations,
+			})
+		}
+
+		start_unmarshal := time.Now()
+
+		err = osm.UnmarshalPlanet(
+			planet,
+			input,
+			logger)
+		if err != nil {
+			logger.Warn(errors.Wrap(err, "Error importing data from planet file at "+input.Uri))
+			os.Exit(1)
+		}
+
+		err = input.Close()
+		if err != nil {
+			fmt.Println("Error closing input at uri " + input.Uri)
+			os.Exit(1)
+		}
+
+		if profile {
+			logger.InfoWithFields("Finished importing data from planet file", map[string]interface{}{"uri": input.Uri, "duration": time.Since(start_unmarshal).String()})
+		}
 	}
 
 	if summarize {
-		summary := planet.Summarize(summarize_keys, async)
+		start_summarize := time.Now()
+		summary := planet.Summarize(summarize_keys)
 		summary.Print()
+		if profile {
+			logger.InfoWithFields("Finished summary ", map[string]interface{}{"duration": time.Since(start_summarize).String()})
+		}
 	}
 
-	if len(output_uri) > 0 {
-
-		if output_uri == "stdout" || output_uri == "stderr" || strings.HasSuffix(output_path, ".osm") {
-			start_marshal := time.Now()
-			err := osm.MarshalPlanet(output_uri, output_scheme, output_path, outputConfig, planet)
-			if err != nil {
-				logger.Warn(errors.Wrap(err, "Error marshalling planet."))
-				os.Exit(1)
+	start_output := time.Now()
+	ch := make(chan interface{})
+	go func(ch chan interface{}) {
+		for msg := range ch {
+			switch msg.(type) {
+			case error:
+				logger.Warn(err)
+			case Message:
+				logger.InfoWithFields(msg.(Message).Message, msg.(Message).Fields)
+			default:
+				logger.Info(msg)
 			}
-			if profile {
-				logger.Info("Marshalled in " + time.Since(start_marshal).String())
-			}
-		} else if strings.HasSuffix(output_path, ".osm.gz") {
-			output_bytes := make([]byte, 0)
-			if pretty {
-				output_bytes, err = xml.MarshalIndent(planet, XML_PRETTY_PREFIX, XML_PRETTY_INDENT)
-			} else {
-				output_bytes, err = xml.Marshal(planet)
-			}
-
-			if err != nil {
-				logger.Warn(errors.Wrap(err, "Error marshalling output"))
-				os.Exit(1)
-			}
-
-			if verbose {
-				logger.Info("Writing to " + output_uri + ".")
-			}
-
-			err := xmlutil.WriteBytes(output_uri, output_scheme, output_path_expanded, output_bytes, s3_client, output_s3_bucket, output_s3_key)
-			if err != nil {
-				logger.Warn(errors.Wrap(err, "Error writing xml to output"))
-				os.Exit(1)
-			}
-		} else if strings.HasSuffix(output_path, ".geojson.gz") || strings.HasSuffix(output_path, ".geojson") {
-
-			output_bytes, err := json.Marshal(planet.FeatureCollection())
-			if err != nil {
-				logger.Warn(errors.Wrap(err, "Could not marshal feature collection as response"))
-				os.Exit(1)
-			}
-
-			if output_uri == "stdout" {
-				fmt.Println(string(output_bytes))
-			} else if output_uri == "stderr" {
-				fmt.Fprintf(os.Stderr, string(output_bytes))
-			} else if output_scheme == "s3" {
-
-			} else if output_scheme == "file" {
-
-				output_file, err := os.OpenFile(output_path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
-				if err != nil {
-					logger.Warn(errors.Wrap(err, "error opening file to write GeoJSON to disk"))
-					os.Exit(1)
-				}
-				w := bufio.NewWriter(output_file)
-
-				_, err = w.Write(output_bytes)
-				if err != nil {
-					logger.Warn(errors.Wrap(err, "Error writing string to GeoJSON file"))
-					os.Exit(1)
-				}
-
-				_, err = w.WriteString("\n")
-				if err != nil {
-					logger.Warn(errors.Wrap(err, "Error writing last newline to GeoJSON file"))
-					os.Exit(1)
-				}
-
-				w.Flush()
-				if err != nil {
-					logger.Warn(errors.Wrap(err, "Error flushing output to bufio writer for GeoJSON file"))
-					os.Exit(1)
-				}
-
-				err = output_file.Close()
-				if err != nil {
-					logger.Warn(errors.Wrap(err, "Error closing file writer for GeoJSON file."))
-					os.Exit(1)
-				}
-			}
-
 		}
+	}(ch)
+
+	var wg sync.WaitGroup
+	for i, o := range config.Outputs {
+		wg.Add(1)
+		go func(wg *sync.WaitGroup, planet *osm.Planet, output_id int, output *osm.Output, ch chan<- interface{}, verbose bool) {
+
+			start_marshal := time.Now()
+
+			if output.Uri == "stdout" || output.Uri == "stderr" || strings.HasSuffix(output.Path, ".osm") || strings.HasSuffix(output.Path, ".osm.gz") {
+				err := osm.MarshalPlanet(output, config, planet)
+				if err != nil {
+					ch <- errors.Wrap(err, "Output "+strconv.Itoa(output_id)+" | Error marshalling to "+output.Uri)
+					wg.Done()
+					return
+				}
+			} else if strings.HasSuffix(output.Path, ".geojson.gz") || strings.HasSuffix(output.Path, ".geojson") {
+
+				output_fc, err := planet.FeatureCollection(output)
+				if err != nil {
+					ch <- errors.Wrap(err, "Could not create feature collection from planet")
+					wg.Done()
+					return
+				}
+
+				output_bytes, err := json.Marshal(output_fc)
+				if err != nil {
+					ch <- errors.Wrap(err, "Could not marshal feature collection as response")
+					wg.Done()
+					return
+				}
+
+				if output.Uri == "stdout" {
+					fmt.Println(string(output_bytes))
+				} else if output.Uri == "stderr" {
+					fmt.Fprintf(os.Stderr, string(output_bytes))
+				} else if output.Scheme == "s3" {
+
+				} else if output.Scheme == "file" {
+
+					output_file, err := os.OpenFile(output.Path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+					if err != nil {
+						ch <- errors.Wrap(err, "error opening file to write GeoJSON to disk")
+						wg.Done()
+						return
+					}
+					w := bufio.NewWriter(output_file)
+
+					_, err = w.Write(output_bytes)
+					if err != nil {
+						ch <- errors.Wrap(err, "Error writing string to GeoJSON file")
+						wg.Done()
+						return
+					}
+
+					_, err = w.WriteString("\n")
+					if err != nil {
+						ch <- errors.Wrap(err, "Error writing last newline to GeoJSON file")
+						wg.Done()
+						return
+					}
+
+					w.Flush()
+					if err != nil {
+						ch <- errors.Wrap(err, "Error flushing output to bufio writer for GeoJSON file")
+						wg.Done()
+						return
+					}
+
+					err = output_file.Close()
+					if err != nil {
+						ch <- errors.Wrap(err, "Error closing file writer for GeoJSON file.")
+						wg.Done()
+						return
+					}
+				}
+
+			}
+
+			if profile {
+				ch <- Message{Message: "Writing complete", Fields: map[string]interface{}{"uri": output.Uri, "duration": time.Since(start_marshal).String()}}
+			}
+
+			wg.Done()
+
+		}(&wg, planet, i, o, ch, verbose)
+	}
+
+	wg.Wait()
+	close(ch)
+
+	if profile {
+		logger.Info("Writing to all output finished in " + time.Since(start_output).String())
 	}
 
 	elapsed := time.Since(start)

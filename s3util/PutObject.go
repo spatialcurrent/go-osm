@@ -16,6 +16,10 @@ import (
 	"github.com/pkg/errors"
 )
 
+// PutObject uploads a file to S3 at the given bucket and key
+// If the key ends in ".gz", then the contents are compressed before upload.
+// If the key ends in ".bz2", then errors out as Go does not support writing to bzip2 (see https://github.com/golang/go/issues/4828)
+// Returns an error if any.
 func PutObject(s3_client *s3.S3, bucket string, key string, data []byte) error {
 
 	input := &s3.PutObjectInput{

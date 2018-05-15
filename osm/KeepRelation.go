@@ -4,17 +4,17 @@ import (
 	"github.com/spatialcurrent/go-dfl/dfl"
 )
 
-func KeepWay(planet *Planet, fi *Filter, w *Way, dfl_cache *dfl.Cache) (bool, error) {
+func KeepRelation(planet *Planet, fi *Filter, r *Relation, dfl_cache *dfl.Cache) (bool, error) {
 
 	if fi == nil {
 		return true, nil
 	}
 
-	m := planet.GetTagsAsMap(w.GetTagsIndex())
-	m["timestamp"] = w.Timestamp
-	m["version"] = w.Version
-	m["uid"] = w.UserId
-	m["user"] = w.UserName
+	m := planet.GetTagsAsMap(r.GetTagsIndex())
+	m["timestamp"] = r.Timestamp
+	m["version"] = r.Version
+	m["uid"] = r.UserId
+	m["user"] = r.UserName
 
 	if fi.HasKeysToKeep() {
 		keep := false

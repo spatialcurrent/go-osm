@@ -3,7 +3,7 @@ package osm
 import (
 	"encoding/xml"
 	"fmt"
-	"strconv"
+	//"strconv"
 	"time"
 )
 
@@ -11,12 +11,12 @@ import (
 	"github.com/pkg/errors"
 )
 
-func MarshalWay(encoder *xml.Encoder, planet *Planet, output_config Output, w *Way) error {
+func MarshalWay(encoder *xml.Encoder, planet *Planet, output_config *Output, w *Way) error {
 	attrs := []xml.Attr{
 		xml.Attr{Name: xml.Name{Space: "", Local: "id"}, Value: fmt.Sprint(w.Id)},
 	}
 	if !output_config.DropVersion {
-		attrs = append(attrs, xml.Attr{Name: xml.Name{Space: "", Local: "version"}, Value: strconv.Itoa(w.Version)})
+		attrs = append(attrs, xml.Attr{Name: xml.Name{Space: "", Local: "version"}, Value: fmt.Sprint(w.Version)})
 	}
 	if !output_config.DropTimestamp {
 		attrs = append(attrs, xml.Attr{Name: xml.Name{Space: "", Local: "timestamp"}, Value: w.Timestamp.Format(time.RFC3339)})

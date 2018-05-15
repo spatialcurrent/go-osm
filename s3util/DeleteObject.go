@@ -5,6 +5,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 )
 
+// DeleteObject deletes a bucket in AWS S3 with simplistic error checking
 func DeleteObject(s3_client *s3.S3, bucket string, key string) error {
 	input := &s3.DeleteObjectInput{
 		Bucket: aws.String(bucket),
