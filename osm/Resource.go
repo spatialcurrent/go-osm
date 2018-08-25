@@ -1,12 +1,17 @@
 package osm
 
 import (
+	"net/http"
 	"os"
 )
 
 import (
 	"github.com/mitchellh/go-homedir"
 	"github.com/pkg/errors"
+)
+
+import (
+	"github.com/spatialcurrent/go-reader/reader"
 )
 
 var SUPPORTED_SCHEMES = []string{
@@ -51,7 +56,11 @@ func (r *Resource) Init(ctx map[string]interface{}) error {
 		r.Type = "stream"
 
 	} else {
-		scheme, fullpath := SplitUri(r.Uri, SUPPORTED_SCHEMES)
+
+		scheme, fullpath := reader.SplitUri(r.Uri)
+		if scheme == "" {
+			scheme = "file"
+		}
 		r.Scheme = scheme
 
 		if scheme == "file" {
@@ -63,6 +72,10 @@ func (r *Resource) Init(ctx map[string]interface{}) error {
 				return errors.Wrap(err, "Error expanding resource file path")
 			}
 			r.PathExpanded = p
+
+		} else if scheme == "http" || scheme == "https" {
+
+			r.Type = "web"
 
 		} else if scheme == "hdfs" {
 
@@ -78,9 +91,9 @@ func (r *Resource) Init(ctx map[string]interface{}) error {
 		} else if scheme == "s3" {
 
 			r.Type = "s3"
-			b, k, err := ParsePath(r.Path)
+			b, k, err := ParsePath(fullpath)
 			if err != nil {
-				return errors.Wrap(err, "Error parsing AWS S3 path")
+				return errors.Wrap(err, "Error parsing AWS S3 path "+fullpath)
 			}
 			r.Bucket = b
 			r.Key = k
@@ -99,6 +112,17 @@ func (r *Resource) FileExists() bool {
 	} else {
 		return true
 	}
+}
+
+func (r *Resource) UrlExists() bool {
+	resp, err := http.Head(r.Uri)
+	if err != nil {
+		return false
+	}
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	return true
 }
 
 func (r Resource) HasUri() bool {

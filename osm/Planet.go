@@ -77,21 +77,20 @@ func (p *Planet) WayToFeature(w *Way) graph.Feature {
 		graph.NewLine(coordinates))
 }
 
-func (p *Planet) FeatureCollection(output *Output) (graph.FeatureCollection, error) {
+func (p *Planet) GetFeatures(output *Output) ([]graph.Feature, error) {
 
 	var dfl_cache *dfl.Cache
 	if output.Filter.HasExpression() && output.Filter.UseCache {
 		dfl_cache = dfl.NewCache()
 	}
 
-	fc := graph.FeatureCollection{}
 	features := make([]graph.Feature, 0)
 
 	if !output.DropNodes {
 		for _, n := range p.Nodes {
 			keep, err := KeepNode(p, output.Filter, n, dfl_cache)
 			if err != nil {
-				return fc, errors.Wrap(err, "Error filtering node for FeatureCollection")
+				return features, errors.Wrap(err, "Error filtering node for FeatureCollection")
 			}
 			if keep {
 				features = append(features, NodeToFeature(n, p.Tags))
@@ -105,7 +104,7 @@ func (p *Planet) FeatureCollection(output *Output) (graph.FeatureCollection, err
 		for _, w := range p.Ways {
 			keep, err := KeepWay(p, output.Filter, w, dfl_cache)
 			if err != nil {
-				return fc, errors.Wrap(err, "Error filtering way for FeatureCollection.")
+				return features, errors.Wrap(err, "Error filtering way for FeatureCollection.")
 			}
 			if keep {
 				if output.WaysToNodes {
@@ -124,9 +123,16 @@ func (p *Planet) FeatureCollection(output *Output) (graph.FeatureCollection, err
 		}
 	}
 
-	fc = graph.NewFeatureCollection(features)
+	return features, nil
+}
 
-	return fc, nil
+func (p *Planet) GetFeatureCollection(output *Output) (graph.FeatureCollection, error) {
+
+	features, err := p.GetFeatures(output)
+	if err != nil {
+		return graph.FeatureCollection{}, errors.Wrap(err, "error getting features from planet")
+	}
+	return graph.NewFeatureCollection(features), nil
 }
 
 func (p Planet) BoundingBox() string {

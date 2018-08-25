@@ -1,3 +1,4 @@
+// +build !js
 package main
 
 import (
@@ -38,6 +39,8 @@ import (
 import (
 	"github.com/spatialcurrent/go-composite-logger/compositelogger"
 	"github.com/spatialcurrent/go-dfl/dfl"
+	"github.com/spatialcurrent/go-reader/reader"
+	//"github.com/spatialcurrent/go-simple-serializer/gss"
 )
 
 import (
@@ -58,28 +61,15 @@ type Message struct {
 	Fields  map[string]interface{}
 }
 
-func connect_to_aws(aws_access_key_id string, aws_secret_access_key string, aws_region string) *session.Session {
+func connect_to_aws(aws_access_key_id string, aws_secret_access_key string, aws_session_token string, aws_region string) *session.Session {
 	aws_session := session.Must(session.NewSessionWithOptions(session.Options{
 		Config: aws.Config{
-			Credentials: credentials.NewStaticCredentials(aws_access_key_id, aws_secret_access_key, ""),
+			Credentials: credentials.NewStaticCredentials(aws_access_key_id, aws_secret_access_key, aws_session_token),
 			MaxRetries:  aws.Int(3),
 			Region:      aws.String(aws_region),
 		},
 	}))
 	return aws_session
-}
-
-func dfl_build_funcs() *dfl.FunctionMap {
-	funcs := dfl.FunctionMap{}
-
-	funcs["len"] = func(ctx dfl.Context, args []string) (interface{}, error) {
-		if len(args) != 1 {
-			return 0, errors.New("Invalid number of arguments to len.")
-		}
-		return len(args[0]), nil
-	}
-
-	return &funcs
 }
 
 func main() {
@@ -91,10 +81,13 @@ func main() {
 	var aws_default_region string
 	var aws_access_key_id string
 	var aws_secret_access_key string
+	var aws_session_token string
+	var hdfs_name_node string
 
 	var config_uri string
 
 	var input_uri_text string
+	var input_uri_separator string
 
 	var gdal_ini_uri string
 	var gdal_ini_section string
@@ -112,6 +105,9 @@ func main() {
 	// ---------------------------------------------------------
 	// Output flags
 	var output_uri_text string
+	var output_uri_separator string
+	var output_format string
+
 	var drop_text string
 	var drop_nodes bool
 	var drop_ways bool
@@ -143,22 +139,15 @@ func main() {
 	flag.StringVar(&aws_default_region, "aws_default_region", "", "Defaults to value of environment variable AWS_DEFAULT_REGION.")
 	flag.StringVar(&aws_access_key_id, "aws_access_key_id", "", "Defaults to value of environment variable AWS_ACCESS_KEY_ID")
 	flag.StringVar(&aws_secret_access_key, "aws_secret_access_key", "", "Defaults to value of environment variable AWS_SECRET_ACCESS_KEY.")
-
-	if len(aws_default_region) == 0 {
-		aws_default_region = os.Getenv("AWS_DEFAULT_REGION")
-	}
-	if len(aws_access_key_id) == 0 {
-		aws_access_key_id = os.Getenv("AWS_ACCESS_KEY_ID")
-	}
-	if len(aws_secret_access_key) == 0 {
-		aws_secret_access_key = os.Getenv("AWS_SECRET_ACCESS_KEY")
-	}
+	flag.StringVar(&aws_session_token, "aws_session_token", "", "Defaults to value of environment variable AWS_SESSION_TOKEN.")
 
 	// Config Flags
 	flag.StringVar(&config_uri, "config_uri", "", "Config uri.  Uri to config file.  If given, ignores most command line flags.  Defaults to value of environment variable GO_OSM_CONFIG_URI.")
 
 	// Input Flags
-	flag.StringVar(&input_uri_text, "input_uri", "", "A single or colon-separated list of input uris.  Supports wildcards.  \"stdin\" or uri to input file.")
+	flag.StringVar(&input_uri_text, "input_uri", "", "A single or separated list of input uris.  Supports wildcards.  \"stdin\" or uri to input file.")
+	flag.StringVar(&input_uri_separator, "input_uri_separator", "", "Separator for splitting input_uri into multiple, e.g., :.  By default nothing.")
+
 	flag.StringVar(&gdal_ini_uri, "gdal_ini_uri", "", "Uri to GDAL ini file for convience.  See http://www.gdal.org/drv_osm.html.")
 	flag.StringVar(&gdal_ini_section, "gdal_ini_section", "points", "Section to parse in GDAL in file.  See http://www.gdal.org/drv_osm.html.")
 
@@ -188,6 +177,8 @@ func main() {
 
 	// Output Flags
 	flag.StringVar(&output_uri_text, "output_uri", "", "A single or colon-separated list of uutput uris. \"stdout\", \"stderr\", or uri to output file.")
+	flag.StringVar(&output_uri_separator, "output_uri_separator", "", "Separator for splitting output_uri into multiple, e.g., :.  By default nothing.")
+	flag.StringVar(&output_format, "output_format", "osm", "The output format: osm, geojson, geojsonl")
 	flag.StringVar(&output_keys_keep_text, "output_keys_keep", "", "Comma-separated list of tag keys to keep in output.  Drop all other keys.")
 	flag.StringVar(&output_keys_drop_text, "output_keys_drop", "", "Comma-separated list of keys to drop in output.  Keep everything else.")
 
@@ -206,11 +197,28 @@ func main() {
 
 	flag.Parse()
 
+	if len(aws_default_region) == 0 {
+		aws_default_region = os.Getenv("AWS_DEFAULT_REGION")
+	}
+	if len(aws_access_key_id) == 0 {
+		aws_access_key_id = os.Getenv("AWS_ACCESS_KEY_ID")
+	}
+	if len(aws_secret_access_key) == 0 {
+		aws_secret_access_key = os.Getenv("AWS_SECRET_ACCESS_KEY")
+	}
+	if len(aws_session_token) == 0 {
+		aws_session_token = os.Getenv("AWS_SESSION_TOKEN")
+	}
+
+	if len(hdfs_name_node) == 0 {
+		hdfs_name_node = os.Getenv("HDFS_DEFAULT_NAME_NODE")
+	}
+
 	if help {
 		fmt.Println("Usage: osm -input_uri INPUT[:INPUT_2][:INPUT_3] -output_uri OUTPUT [-verbose] [-dry_run] [-version] [-help] [A=1] [B=2]")
 		fmt.Println("Supported Schemes: " + strings.Join(osm.SUPPORTED_SCHEMES, ", "))
 		fmt.Println("Supported Input File Extensions: .osm, .osm.gz, .osm.bz2")
-		fmt.Println("Supported Output File Extensions: .osm, .osm.gz, .geojson, .geojson.gz")
+		fmt.Println("Supported Output File Extensions: .osm, .osm.gz, .geojson, .geojsonl, .geojson.gz, .geojsonl.gz")
 		fmt.Println("Options:")
 		flag.PrintDefaults()
 		os.Exit(0)
@@ -241,7 +249,7 @@ func main() {
 		input_uri_text = os.Getenv("GO_OSM_INPUT_URI")
 	}
 
-	funcs := dfl_build_funcs()
+	funcs := dfl.NewFuntionMapWithDefaults()
 
 	filter_keys_keep := osm.ParseSliceString(filter_keys_keep_text)
 	filter_keys_drop := osm.ParseSliceString(filter_keys_drop_text)
@@ -284,9 +292,17 @@ func main() {
 
 		if len(input_uri_text) > 0 {
 			input_configs := make([]osm.InputConfig, 0)
-			input_uris := strings.Split(input_uri_text, ":")
+			input_uris := make([]string, 0)
+			if len(input_uri_separator) > 0 {
+				input_uris = strings.Split(input_uri_text, input_uri_separator)
+			} else {
+				input_uris = []string{input_uri_text}
+			}
 			for _, input_uri := range input_uris {
-				scheme, input_path_glob := osm.SplitUri(input_uri, osm.SUPPORTED_SCHEMES)
+				scheme, input_path_glob := reader.SplitUri(input_uri)
+				if scheme == "" {
+					scheme = "file"
+				}
 				if scheme == "file" && strings.Contains(input_path_glob, "*") {
 					input_path_expanded, err := homedir.Expand(input_path_glob)
 					if err != nil {
@@ -331,9 +347,17 @@ func main() {
 
 		input_configs := make([]osm.InputConfig, 0)
 		if len(input_uri_text) > 0 {
-			input_uris := strings.Split(input_uri_text, ":")
+			input_uris := make([]string, 0)
+			if len(input_uri_separator) > 0 {
+				input_uris = strings.Split(input_uri_text, input_uri_separator)
+			} else {
+				input_uris = []string{input_uri_text}
+			}
 			for _, input_uri := range input_uris {
-				scheme, input_path_glob := osm.SplitUri(input_uri, osm.SUPPORTED_SCHEMES)
+				scheme, input_path_glob := reader.SplitUri(input_uri)
+				if scheme == "" {
+					scheme = "file"
+				}
 				if scheme == "file" && strings.Contains(input_path_glob, "*") {
 					input_path_expanded, err := homedir.Expand(input_path_glob)
 					if err != nil {
@@ -359,7 +383,13 @@ func main() {
 
 		output_configs := make([]osm.OutputConfig, 0)
 		if len(output_uri_text) > 0 {
-			output_uris := strings.Split(output_uri_text, ":")
+			//output_uris := strings.Split(output_uri_text, ":")
+			output_uris := make([]string, 0)
+			if len(output_uri_separator) > 0 {
+				output_uris = strings.Split(output_uri_text, output_uri_separator)
+			} else {
+				output_uris = []string{output_uri_text}
+			}
 			for _, output_uri := range output_uris {
 				output_configs = append(output_configs, osm.NewOutputConfig(
 					output_uri,
@@ -428,7 +458,7 @@ func main() {
 		logger.Info("Initializing...")
 	}
 
-	err = config.Init(ctx, funcs)
+	err = config.Init(ctx, &funcs)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
@@ -473,7 +503,7 @@ func main() {
 	hdfs_clients := map[string]*hdfs.Client{}
 
 	if config.HasResourceType("s3") {
-		aws_session = connect_to_aws(aws_access_key_id, aws_secret_access_key, aws_default_region)
+		aws_session = connect_to_aws(aws_access_key_id, aws_secret_access_key, aws_session_token, aws_default_region)
 		s3_client = s3.New(aws_session)
 	}
 
@@ -493,6 +523,8 @@ func main() {
 		switch input.GetType() {
 		case "file":
 			input.Exists = input.FileExists()
+		case "web":
+			input.Exists = input.UrlExists()
 		case "hdfs":
 			_, err := hdfs_clients[input.NameNode].Stat(input.Path)
 			input.Exists = !os.IsNotExist(err)
@@ -688,18 +720,28 @@ func main() {
 
 			start_marshal := time.Now()
 
-			if output.Uri == "stdout" || output.Uri == "stderr" || strings.HasSuffix(output.Path, ".osm") || strings.HasSuffix(output.Path, ".osm.gz") {
+			if len(output_format) == 0 {
+				if strings.HasSuffix(output.Path, ".geojson.gz") || strings.HasSuffix(output.Path, ".geojson") {
+					output_format = "geojson"
+				} else if strings.HasSuffix(output.Path, ".geojsonl.gz") || strings.HasSuffix(output.Path, ".geojsonl") {
+					output_format = "geojsonl"
+				} else {
+					output_format = "osm"
+				}
+			}
+
+			if output_format == "osm" {
 				err := osm.MarshalPlanet(output, config, planet)
 				if err != nil {
 					ch <- errors.Wrap(err, "Output "+strconv.Itoa(output_id)+" | Error marshalling to "+output.Uri)
 					wg.Done()
 					return
 				}
-			} else if strings.HasSuffix(output.Path, ".geojson.gz") || strings.HasSuffix(output.Path, ".geojson") {
+			} else if output_format == "geojson" {
 
-				output_fc, err := planet.FeatureCollection(output)
+				output_fc, err := planet.GetFeatureCollection(output)
 				if err != nil {
-					ch <- errors.Wrap(err, "Could not create feature collection from planet")
+					ch <- errors.Wrap(err, "Could not get feature collection from planet")
 					wg.Done()
 					return
 				}
@@ -756,6 +798,83 @@ func main() {
 					}
 				}
 
+			} else if output_format == "geojsonl" {
+
+				output_features, err := planet.GetFeatures(output)
+				if err != nil {
+					ch <- errors.Wrap(err, "Could not get features from planet")
+					wg.Done()
+					return
+				}
+
+				if output.Uri == "stdout" {
+					for _, f := range output_features {
+						output_bytes, err := json.Marshal(f)
+						if err != nil {
+							ch <- errors.Wrap(err, "Could not marshal feature as response")
+							wg.Done()
+							return
+						}
+						fmt.Println(string(output_bytes))
+					}
+				} else if output.Uri == "stderr" {
+					for _, f := range output_features {
+						output_bytes, err := json.Marshal(f)
+						if err != nil {
+							ch <- errors.Wrap(err, "Could not marshal feature as response")
+							wg.Done()
+							return
+						}
+						fmt.Fprintf(os.Stderr, string(output_bytes))
+					}
+				} else if output.Scheme == "s3" {
+
+				} else if output.Scheme == "file" {
+
+					output_file, err := os.OpenFile(output.Path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+					if err != nil {
+						ch <- errors.Wrap(err, "error opening file to write GeoJSON to disk")
+						wg.Done()
+						return
+					}
+					w := bufio.NewWriter(output_file)
+
+					for _, f := range output_features {
+						output_bytes, err := json.Marshal(f)
+						if err != nil {
+							ch <- errors.Wrap(err, "Could not marshal feature as response")
+							wg.Done()
+							return
+						}
+						_, err = w.Write(output_bytes)
+						if err != nil {
+							ch <- errors.Wrap(err, "Error writing string to GeoJSON file")
+							wg.Done()
+							return
+						}
+
+						_, err = w.WriteString("\n")
+						if err != nil {
+							ch <- errors.Wrap(err, "Error writing newline to GeoJSON file")
+							wg.Done()
+							return
+						}
+					}
+
+					w.Flush()
+					if err != nil {
+						ch <- errors.Wrap(err, "Error flushing output to bufio writer for GeoJSON file")
+						wg.Done()
+						return
+					}
+
+					err = output_file.Close()
+					if err != nil {
+						ch <- errors.Wrap(err, "Error closing file writer for GeoJSON file.")
+						wg.Done()
+						return
+					}
+				}
 			}
 
 			if profile {
@@ -774,7 +893,9 @@ func main() {
 		logger.Info("Writing to all output finished in " + time.Since(start_output).String())
 	}
 
-	elapsed := time.Since(start)
-	logger.Info("Done in " + elapsed.String())
+	if verbose {
+		elapsed := time.Since(start)
+		logger.Info("Done in " + elapsed.String())
+	}
 
 }
